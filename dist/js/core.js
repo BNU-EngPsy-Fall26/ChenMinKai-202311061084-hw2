@@ -1,14 +1,13 @@
 /* 实验协议、确定性随机化、刺激绘制和被试层面分析。无网络与界面状态依赖。 */
 (function (root) {
   'use strict';
-  const VERSION = '1.0.0';
-  const PROTOCOL = 'attention-v2.1-20261101';
-  const POLICIES = ['none', 'always', 'gated'];
+  const VERSION = '1.1.0';
+  const PROTOCOL = 'attention-v2.2-short-20261101';
+  const POLICIES = ['always', 'gated'];
   const POLICY_NAMES = { none: '自主搜索', always: '持续提示', gated: '择机提示' };
-  const SUPPORT_NAMES = { none: '主图', copy: '原图复制窗', aligned: '对齐比较窗' };
+  const SUPPORT_NAMES = { none: '主图', aligned: '对齐比较窗' };
   const COLOR = { orange: '#cc6b32', blue: '#28649f', ink: '#193347', muted: '#c9d0d5' };
-  const PERMS = [[0,1,2],[0,2,1],[1,0,2],[1,2,0],[2,0,1],[2,1,0]];
-  const RATIOS = [20,26,32,38,44,50,56,62,68,74,80,86];
+  const RATIOS = [20,28,36,44,52,60,68,76,82,88];
   const hash = s => { let x=2166136261; for (const c of String(s)) { x^=c.charCodeAt(0); x=Math.imul(x,16777619); } return x>>>0; };
   function random(seed) { let a=typeof seed==='number'?seed:hash(seed); return () => { a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
   function shuffle(arr, rng) { const a=arr.slice(); for(let i=a.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
@@ -17,46 +16,56 @@
   const esc = v => String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function classicTrials(type, seed, practice=false) {
     const rng=random(seed), trials=[];
-    for(const n of [8,16,24]) for(let i=0;i<(practice?3:12);i++) trials.push({phase:practice?'practice':'formal', section:'classic', search_type:type, set_size:n, target_side:i%2?'right':'left', gap:Math.floor(i/2)%2?'right':'left', seed:Math.floor(rng()*4294967296)});
+    for(let i=0;i<(practice?2:10);i++) trials.push({
+      phase:practice?'practice':'formal',section:'classic',search_type:type,set_size:24,
+      target_side:i%2?'right':'left',gap:(Math.floor(i/2)+i%2)%2?'right':'left',seed:Math.floor(rng()*4294967296)
+    });
     return shuffle(trials,rng);
   }
   function aidTrials(policy, seed, practice=false) {
-    const rng=random(seed), trials=[];
-    const cells=practice?[['high',true,3],['high',false,1],['low',true,1],['low',false,1]]:[['high',true,30],['high',false,10],['low',true,10],['low',false,10]];
+    const rng=random(seed),trials=[];
+    // 每个“策略×可靠状态”10次；正确/错误提示是受控概率的实现，不另立少量试次推断。
+    const cells=practice?[['high',true,1],['low',false,1]]:[['high',true,8],['high',false,2],['low',true,5],['low',false,5]];
     cells.forEach(([reliability,valid,n],ci)=>{for(let i=0;i<n;i++){
-      const target_side=i%2?'right':'left';
-      trials.push({phase:practice?'practice':'formal',section:'aid',search_type:'conjunction',set_size:24,policy,reliability,potential_valid:valid,cue_shown:policy==='always'||policy==='gated'&&reliability==='high',target_side,cue_side:valid?target_side:(target_side==='left'?'right':'left'),gap:(Math.floor(i/2)+ci%2)%2?'right':'left',seed:Math.floor(rng()*4294967296)});
+      const target_side=(i+ci%2)%2?'right':'left';
+      trials.push({phase:practice?'practice':'formal',section:'aid',search_type:'conjunction',set_size:24,
+        policy,reliability,potential_valid:valid,cue_shown:policy==='always'||policy==='gated'&&reliability==='high',
+        target_side,cue_side:valid?target_side:(target_side==='left'?'right':'left'),
+        gap:(Math.floor(i/2)+i%2+ci%2)%2?'right':'left',seed:Math.floor(rng()*4294967296)});
     }});
     return shuffle(trials,rng);
   }
-  function ratioTrials(chart, support, seed, practice=false) {
+  function ratioTrials(chart,support,seed,practice=false){
     const rng=random(seed);
-    return shuffle((practice?[32,68]:RATIOS).map(r=>{
-      const b=32+rng()*12, a=b*r/100, remain=100-a-b;
-      const weights=[.75+rng()*.5,.75+rng()*.5,.75+rng()*.5], sum=weights.reduce((a,b)=>a+b,0);
+    return shuffle((practice?[chart==='bar'?32:68]:RATIOS).map(r=>{
+      const b=32+rng()*12,a=b*r/100,remain=100-a-b;
+      const weights=[.75+rng()*.5,.75+rng()*.5,.75+rng()*.5],sum=weights.reduce((a,b)=>a+b,0);
       const items=shuffle([{label:'A',value:a},{label:'B',value:b},...weights.map((w,i)=>({label:String.fromCharCode(67+i),value:remain*w/sum}))],rng);
-      return {phase:practice?'practice':'formal',section:'ratio',chart_type:chart,support,true_ratio:r,values:items.map(d=>d.value),labels:items.map(d=>d.label),rotation:rng()*360,seed:Math.floor(rng()*4294967296)};
+      return {phase:practice?'practice':'formal',section:'ratio',chart_type:chart,support,true_ratio:r,
+        values:items.map(d=>d.value),labels:items.map(d=>d.label),rotation:rng()*360,seed:Math.floor(rng()*4294967296)};
     }),rng);
   }
-  function makeRun(experiment, participant, mode='formal') {
-    const id=uid(), seed=hash(id), index=assignment(participant), blocks=[];
-    if(experiment==='search') {
+  function makeRun(experiment,participant,mode='formal'){
+    const id=uid(),seed=hash(id),index=assignment(participant),blocks=[];
+    if(experiment==='search'){
       const types=index%2?['conjunction','feature']:['feature','conjunction'];
-      types.forEach((type,i)=>blocks.push({id:`classic-${type}`,section:'classic',search_type:type,title:'目标搜索',trials:classicTrials(type,seed+i)}));
-      PERMS[index%6].forEach((p,i)=>blocks.push({id:`aid-${POLICIES[p]}`,section:'aid',policy:POLICIES[p],title:POLICY_NAMES[POLICIES[p]],trials:aidTrials(POLICIES[p],seed+100+i)}));
-    } else {
-      const cells=[['bar','none'],['bar','copy'],['bar','aligned'],['pie','none'],['pie','copy'],['pie','aligned']];
-      const order=[0,1,5,2,4,3].map(v=>(v+index%6)%6);
-      order.forEach((v,i)=>{const [chart,support]=cells[v];blocks.push({id:`${chart}-${support}`,section:'ratio',chart_type:chart,support,title:'比例判断',trials:ratioTrials(chart,support,seed+i)});});
+      types.forEach((type,i)=>blocks.push({id:'classic-'+type,section:'classic',search_type:type,title:'目标搜索',trials:classicTrials(type,seed+i)}));
+      const policies=Math.floor(index/2)%2?['gated','always']:['always','gated'];
+      policies.forEach((policy,i)=>blocks.push({id:'aid-'+policy,section:'aid',policy,title:POLICY_NAMES[policy],trials:aidTrials(policy,seed+100+i)}));
+    }else{
+      const cells=[['bar','none'],['bar','aligned'],['pie','none'],['pie','aligned']];
+      [0,1,3,2].map(v=>(v+index%4)%4).forEach((v,i)=>{const [chart,support]=cells[v];blocks.push({id:chart+'-'+support,section:'ratio',chart_type:chart,support,title:'比例判断',trials:ratioTrials(chart,support,seed+i)});});
     }
-    if(mode!=='formal') blocks.forEach(b=>b.trials=b.trials.slice(0,mode==='test'?3:4));
-    return {schema:'attention-lab/run-v1',id,version:VERSION,protocol:PROTOCOL,preregistration:root.LAB_BUILD?{...root.LAB_BUILD}:null,experiment,participant,mode,assignment:index,seed,created_at:new Date().toISOString(),status:'active',mapping:index%2?{f:'right',j:'left'}:{f:'left',j:'right'},blocks,cursor:{block:0,trial:0},trials:[],practice_done:{},practice_rounds:{},upload:{status:'local'}};
+    if(mode!=='formal')blocks.forEach(b=>b.trials=b.trials.slice(0,mode==='test'?3:4));
+    return {schema:'attention-lab/run-v1',id,version:VERSION,protocol:PROTOCOL,preregistration:root.LAB_BUILD?{...root.LAB_BUILD}:null,
+      experiment,participant,mode,assignment:index,seed,created_at:new Date().toISOString(),status:'active',
+      mapping:index%2?{f:'right',j:'left'}:{f:'left',j:'right'},blocks,cursor:{block:0,trial:0},trials:[],practice_done:{},practice_rounds:{},upload:{status:'local'}};
   }
-  function practiceTrials(run, section) {
+  function practiceTrials(run,section){
     const seed=run.seed+500+(run.practice_rounds[section]||0)*47;
     let trials;
-    if(run.experiment==='ratio') trials=['bar','pie'].flatMap((c,i)=>['none','copy','aligned'].flatMap((s,j)=>ratioTrials(c,s,seed+i*8+j,true)));
-    else if(section==='classic') trials=[...classicTrials('feature',seed,true),...classicTrials('conjunction',seed+1,true)];
+    if(run.experiment==='ratio')trials=['bar','pie'].flatMap((c,i)=>['none','aligned'].flatMap((s,j)=>ratioTrials(c,s,seed+i*8+j,true)));
+    else if(section==='classic')trials=[...classicTrials('feature',seed,true),...classicTrials('conjunction',seed+1,true)];
     else trials=[...aidTrials('always',seed,true),...aidTrials('gated',seed+1,true)];
     trials=shuffle(trials,random(seed+29));
     return run.mode==='formal'?trials:trials.slice(0,run.mode==='test'?2:4);
@@ -114,32 +123,35 @@
     return {n,mean:estimate,ci,p,values:a};
   }
   function formalRows(run){return (run.trials||[]).filter(t=>t.phase==='formal'&&!t.technical_invalid&&!t.excluded_reason);}
-  function subjectSummary(run) {
+  function subjectSummary(run){
     const rows=formalRows(run),isSearch=run.experiment==='search';
-    const accuracy=isSearch?mean(rows.map(t=>t.correct?1:0)):null;
-    const quality=isSearch?accuracy>=.75:true;
+    const accuracy=isSearch?mean(rows.map(t=>t.correct?1:0)):null,quality=isSearch?accuracy>=.75:true;
     const valid=rows.filter(t=>!t.timeout&&Number.isFinite(t.rt_ms)&&(isSearch?t.correct&&t.rt_ms>=150&&t.rt_ms<=5000:Number.isFinite(t.estimate)&&t.estimate>=0&&t.estimate<=100&&t.rt_ms>=500&&t.rt_ms<=30000));
     const cells={};
-    function cell(key,raw,min=0){const ids=new Set(raw.map(t=>t.trial_id));const v=valid.filter(t=>ids.has(t.trial_id));const rt=mean(v.map(t=>t.rt_ms)), ae=mean(v.map(t=>t.absolute_error));cells[key]={key,total:raw.length,valid:v.length,rt,ae,median:median(v.map(t=>t.rt_ms)),error:isSearch?mean(raw.map(t=>t.correct?0:1)):null,timeout:mean(raw.map(t=>t.timeout?1:0)),bias:mean(v.map(t=>t.signed_error).filter(Number.isFinite)),lae:mean(v.map(t=>t.log_absolute_error).filter(Number.isFinite)),eligible:quality&&v.length>=min};return cells[key];}
-    const effects={};
+    function cell(key,raw,min=8){
+      const ids=new Set(raw.map(t=>t.trial_id)),v=valid.filter(t=>ids.has(t.trial_id));
+      cells[key]={key,total:raw.length,valid:v.length,rt:mean(v.map(t=>t.rt_ms)),ae:mean(v.map(t=>t.absolute_error)),
+        median:median(v.map(t=>t.rt_ms)),error:isSearch?mean(raw.map(t=>t.correct?0:1)):null,timeout:mean(raw.map(t=>t.timeout?1:0)),
+        bias:mean(v.map(t=>t.signed_error).filter(Number.isFinite)),lae:mean(v.map(t=>t.log_absolute_error).filter(Number.isFinite)),eligible:quality&&v.length>=min};
+      return cells[key];
+    }
+    const effects={},difference=(a,b,field='rt')=>a?.eligible&&b?.eligible?a[field]-b[field]:null;
     if(isSearch){
-      const slopes={};for(const type of ['feature','conjunction']){const cs=[8,16,24].map(n=>cell(`classic:${type}:${n}`,rows.filter(t=>t.section==='classic'&&t.search_type===type&&t.set_size===n),10));slopes[type]=cs.every(c=>c.eligible)?slope(cs.map((c,i)=>[[8,16,24][i],c.rt])):null;}
-      effects.classic=slopes.feature!=null&&slopes.conjunction!=null?slopes.conjunction-slopes.feature:null;
-      for(const policy of POLICIES)for(const rel of ['high','low'])cell(`aid:${policy}:${rel}`,rows.filter(t=>t.section==='aid'&&t.policy===policy&&t.reliability===rel),rel==='high'?32:16);
-      const c=(p,r)=>cells[`aid:${p}:${r}`],difference=(a,b,field='rt')=>a?.eligible&&b?.eligible?a[field]-b[field]:null;
+      for(const type of ['feature','conjunction'])cell('classic:'+type+':24',rows.filter(t=>t.section==='classic'&&t.search_type===type));
+      effects.classic=difference(cells['classic:conjunction:24'],cells['classic:feature:24']);
+      for(const policy of POLICIES)for(const rel of ['high','low'])cell('aid:'+policy+':'+rel,rows.filter(t=>t.section==='aid'&&t.policy===policy&&t.reliability===rel));
+      const c=(p,r)=>cells['aid:'+p+':'+r];
       effects.primary=difference(c('always','low'),c('gated','low'));
-      effects.high_benefit=difference(c('none','high'),c('gated','high'));
+      effects.high_difference=difference(c('always','high'),c('gated','high'));
       effects.low_error=c('always','low')?.total&&c('gated','low')?.total?c('always','low').error-c('gated','low').error:null;
-      effects.overall=['always','gated'].every(p=>['high','low'].every(r=>c(p,r).eligible))?((c('always','high').rt*2+c('always','low').rt)-(c('gated','high').rt*2+c('gated','low').rt))/3:null;
-      for(const rel of ['high','low'])for(const validity of [true,false])cell(`detail:always:${rel}:${validity}`,rows.filter(t=>t.section==='aid'&&t.policy==='always'&&t.reliability===rel&&t.potential_valid===validity),validity&&rel==='high'?24:8);
-      effects.feature_slope=slopes.feature;effects.conjunction_slope=slopes.conjunction;
+      effects.overall=POLICIES.every(p=>['high','low'].every(r=>c(p,r).eligible))?
+        ((c('always','high').rt+c('always','low').rt)-(c('gated','high').rt+c('gated','low').rt))/2:null;
     }else{
-      for(const chart of ['bar','pie'])for(const support of ['none','copy','aligned'])cell(`ratio:${chart}:${support}`,rows.filter(t=>t.chart_type===chart&&t.support===support),10);
-      const c=(a,b)=>cells[`ratio:${a}:${b}`],diff=(a,b,field='ae')=>a.eligible&&b.eligible?a[field]-b[field]:null;
-      effects.primary=diff(c('pie','copy'),c('pie','aligned'));
-      effects.practical=diff(c('pie','none'),c('pie','aligned'));
-      effects.classic=diff(c('pie','none'),c('bar','none'));
-      effects.time_cost=diff(c('pie','aligned'),c('pie','copy'),'rt');
+      for(const chart of ['bar','pie'])for(const support of ['none','aligned'])cell('ratio:'+chart+':'+support,rows.filter(t=>t.chart_type===chart&&t.support===support));
+      const c=(a,b)=>cells['ratio:'+a+':'+b];
+      effects.primary=difference(c('pie','none'),c('pie','aligned'),'ae');
+      effects.classic=difference(c('pie','none'),c('bar','none'),'ae');
+      effects.time_cost=difference(c('pie','aligned'),c('pie','none'),'rt');
     }
     return {participant:run.participant,run_id:run.id,experiment:run.experiment,quality,accuracy,raw_count:rows.length,valid_count:valid.length,cells,effects,completed_at:run.completed_at,experiment_order:run.experiment_order};
   }
