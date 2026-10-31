@@ -1,0 +1,11 @@
+# 本仓库只存程序、协议和空结果入口。
+*.csv
+*.zip
+*.log
+*.tmp
+private/
+participant-data/
+.env*
+node_modules/
+Thumbs.db
+desktop.ini
