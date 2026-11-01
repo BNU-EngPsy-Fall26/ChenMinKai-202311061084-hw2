@@ -16,15 +16,33 @@
   const brand=()=>`<div class="brand">${mark()}<span>注意实验室</span></div>`;
   const btn=(label,action,kind='primary',attrs='')=>`<button type="button" class="btn btn-${kind}" data-action="${action}" ${attrs}>${label}</button>`;
   const titleOf=e=>e==='search'?'视觉搜索':'比例判断';
+  const isComplete=r=>r?.status==='complete'&&C.inspectRun(r).ok;
   const fmt=(x,d=0)=>Number.isFinite(x)?x.toFixed(d):'—';
   const dateOf=x=>x?new Date(x).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'—';
   let toastTimer, modalFocus;
   function toast(message){$('#toast').textContent=message;$('#toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),3500);}
   const Store={
-    available:true,storageWarning:false,
+    available:true,storageWarning:false,readOnly:false,recoveryRaw:null,
     data:{schema:'attention-lab/store-v1',profiles:{},runs:[],imports:[],settings:{project:'',autoUpload:false}},
-    load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw){const d=JSON.parse(raw);if(d.schema==='attention-lab/store-v1'&&Array.isArray(d.runs)){this.data={...this.data,...d};this.data.settings={project:'',autoUpload:false,...d.settings};this.data.imports=d.imports||[];}}localStorage.setItem(STORAGE_KEY+':probe','1');localStorage.removeItem(STORAGE_KEY+':probe');}catch(e){this.available=false;}},
-    save(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(this.data));return true;}catch(e){this.available=false;if(!this.storageWarning){this.storageWarning=true;toast('数据保留在当前页面，请导出一份备份。');setTimeout(()=>App.runner?.pause('storage'),0);}return false;}},
+    load(){
+      let raw;
+      try{raw=localStorage.getItem(STORAGE_KEY);}catch{this.available=false;this.readOnly=true;return;}
+      if(raw){
+        try{
+          const d=JSON.parse(raw),object=x=>x&&typeof x==='object'&&!Array.isArray(x);
+          if(d.schema!=='attention-lab/store-v1'||!Array.isArray(d.runs)||!d.runs.every(object)||!object(d.profiles)||d.imports!=null&&(!Array.isArray(d.imports)||!d.imports.every(object))||d.settings!=null&&!object(d.settings))throw Error('存储结构不完整');
+          const next={...this.data,...d,imports:d.imports||[],settings:{project:'',autoUpload:false,...d.settings}};
+          for(const r of [...next.runs,...next.imports]){
+            if(r.upload!=null&&!object(r.upload)||r.upload_history!=null&&(!object(r.upload_history)||!Object.values(r.upload_history).every(object)))throw Error('提交记录结构不完整');
+            if(r.upload?.status==='sending')r.upload={...r.upload,status:'uncertain'};
+            for(const value of Object.values(r.upload_history||{}))if(value.status==='sending')value.status='uncertain';
+          }
+          this.data=next;
+        }catch{this.recoveryRaw=raw;this.available=false;this.readOnly=true;return;}
+      }
+      try{localStorage.setItem(STORAGE_KEY+':probe','1');localStorage.removeItem(STORAGE_KEY+':probe');}catch{this.available=false;}
+    },
+    save(){try{if(this.readOnly)throw Error('原记录保留');localStorage.setItem(STORAGE_KEY,JSON.stringify(this.data));return true;}catch(e){this.available=false;if(!this.storageWarning){this.storageWarning=true;toast('数据保留在当前页面，请导出一份备份。');setTimeout(()=>App.runner?.pause('storage'),0);}return false;}},
     run(id){return this.data.runs.find(r=>r.id===id);},
     upsert(run){const i=this.data.runs.findIndex(r=>r.id===run.id);if(i<0)this.data.runs.push(run);else this.data.runs[i]=run;return this.save();},
     all(){const m=new Map();for(const r of [...this.data.imports,...this.data.runs])m.set(r.id,r);return [...m.values()];},
@@ -34,11 +52,11 @@
     const blob=new Blob([text],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
   }
   function exportJSON(runs){download(`注意实验室_${runs.length===1?runs[0].participant+'_'+runs[0].experiment:'全部记录'}_${new Date().toISOString().slice(0,10)}.json`,JSON.stringify(Store.bundle(runs),null,2));}
-  const CSV_FIELDS=['run_id','participant','experiment','mode','protocol','status','created_at','completed_at','consent_version','experiment_order','key_mapping','trial_id','attempt_id','attempt_number','phase','section','block_index','trial_index','search_type','set_size','policy','reliability','potential_valid','cue_shown','cue_side','target_side','gap','chart_type','support','true_ratio','estimate','absolute_error','signed_error','log_absolute_error','response','correct','rt_ms','timeout','technical_invalid','excluded_reason','seed','values','labels','rotation','onset_ms','trial_elapsed_ms'];
+  const CSV_FIELDS=['run_id','participant','experiment','mode','protocol','status','created_at','completed_at','consent_version','consent_at','withdrawn','withdrawn_at','experiment_order','key_mapping','trial_id','attempt_id','attempt_number','variation_index','stimulus_seed','runtime_version','phase','section','block_index','trial_index','search_type','set_size','policy','reliability','potential_valid','cue_shown','cue_side','target_side','gap','chart_type','support','true_ratio','estimate','absolute_error','signed_error','log_absolute_error','response','correct','rt_ms','timeout','technical_invalid','excluded_reason','seed','values','labels','rotation','onset_ms','trial_elapsed_ms'];
   function exportCSV(runs){
-    const quote=v=>'"'+String(Array.isArray(v)?JSON.stringify(v):v??'').replace(/"/g,'""')+'"';
+    const quote=v=>{let text=String(Array.isArray(v)?JSON.stringify(v):v??'');if(typeof v==='string'&&/^[\s]*[=+\-@]/.test(text))text="'"+text;return '"'+text.replace(/"/g,'""')+'"';};
     const rows=[CSV_FIELDS.map(quote).join(',')];
-    for(const r of runs)for(const t of r.trials||[]){const record={run_id:r.id,participant:r.participant,experiment:r.experiment,mode:r.mode,protocol:r.protocol,status:r.status,created_at:r.created_at,completed_at:r.completed_at,consent_version:r.consent_version,experiment_order:r.experiment_order,key_mapping:JSON.stringify(r.mapping),...t};rows.push(CSV_FIELDS.map(f=>quote(record[f])).join(','));}
+    for(const r of runs)for(const t of r.trials||[]){const record={run_id:r.id,participant:r.participant,experiment:r.experiment,mode:r.mode,protocol:r.protocol,status:r.status,created_at:r.created_at,completed_at:r.completed_at,consent_version:r.consent_version,consent_at:r.consent_at,withdrawn:!!r.withdrawn,withdrawn_at:r.withdrawn_at,experiment_order:r.experiment_order,key_mapping:JSON.stringify(r.mapping),...t};rows.push(CSV_FIELDS.map(f=>quote(record[f])).join(','));}
     download(`注意实验室_${runs.length===1?runs[0].participant+'_'+runs[0].experiment:'全部试次'}.csv`,'\ufeff'+rows.join('\r\n'),'text/csv;charset=utf-8');
   }
   function csvParse(text){
@@ -46,76 +64,115 @@
     for(let i=0;i<text.length;i++){const c=text[i];if(c==='"'){if(inside&&text[i+1]==='"'){field+='"';i++;}else inside=!inside;}else if(c===','&&!inside){row.push(field);field='';}else if((c==='\n'||c==='\r')&&!inside){if(c==='\r'&&text[i+1]==='\n')i++;row.push(field);if(row.some(Boolean))rows.push(row);row=[];field='';}else field+=c;}
     if(field||row.length){row.push(field);rows.push(row);}if(inside)throw Error('请使用完整的CSV文件。');
     const headers=rows.shift()||[],required=['run_id','participant','experiment','mode','protocol','phase','trial_id'];if(required.some(k=>!headers.includes(k)))throw Error('请选择本实验导出的CSV或JSON。');
-    const runs=new Map(),numbers=new Set(['block_index','trial_index','set_size','true_ratio','estimate','absolute_error','signed_error','log_absolute_error','rt_ms','seed','rotation','onset_ms','trial_elapsed_ms']);
-    const booleans=new Set(['potential_valid','cue_shown','correct','timeout','technical_invalid']);
-    for(const cells of rows){const rec={};headers.forEach((k,i)=>{let v=cells[i]??'';if(v!==''&&numbers.has(k))v=Number(v);if(booleans.has(k)&&v!=='')v=v==='true'||v==='1';if(['values','labels'].includes(k)&&v){try{v=JSON.parse(v);}catch{v=[];}}rec[k]=v;});
-      if(!runs.has(rec.run_id))runs.set(rec.run_id,{id:rec.run_id,participant:rec.participant,experiment:rec.experiment,mode:rec.mode,protocol:rec.protocol,status:rec.status,created_at:rec.created_at,completed_at:rec.completed_at,consent_version:rec.consent_version,experiment_order:rec.experiment_order,trials:[]});
-      const t={};for(const k of CSV_FIELDS)if(!['run_id','participant','experiment','mode','protocol','status','created_at','completed_at','consent_version','experiment_order','key_mapping'].includes(k)&&rec[k]!=='')t[k]=rec[k];runs.get(rec.run_id).trials.push(t);
+    const runs=new Map(),numbers=new Set(['block_index','trial_index','set_size','true_ratio','estimate','absolute_error','signed_error','log_absolute_error','rt_ms','seed','rotation','onset_ms','trial_elapsed_ms','attempt_number','variation_index','stimulus_seed']);
+    const booleans=new Set(['potential_valid','cue_shown','correct','timeout','technical_invalid','withdrawn']);
+    for(const cells of rows){const rec={};headers.forEach((k,i)=>{let v=cells[i]??'';if(v!==''&&numbers.has(k))v=Number(v);if(booleans.has(k)&&v!==''){v=v.trim().toLowerCase();if(!['true','false','1','0'].includes(v))throw Error('请检查布尔字段');v=v==='true'||v==='1';}if(['values','labels'].includes(k)&&v){try{v=JSON.parse(v);}catch{v=[];}}rec[k]=v;});
+      if(!runs.has(rec.run_id))runs.set(rec.run_id,{id:rec.run_id,participant:rec.participant,experiment:rec.experiment,mode:rec.mode,protocol:rec.protocol,status:rec.status,created_at:rec.created_at,completed_at:rec.completed_at,consent_version:rec.consent_version,consent_at:rec.consent_at,withdrawn:!!rec.withdrawn,withdrawn_at:rec.withdrawn_at,experiment_order:rec.experiment_order,mapping:rec.key_mapping?JSON.parse(rec.key_mapping):undefined,trials:[]});
+      const t={};for(const k of CSV_FIELDS)if(!['run_id','participant','experiment','mode','protocol','status','created_at','completed_at','consent_version','consent_at','withdrawn','withdrawn_at','experiment_order','key_mapping'].includes(k)&&rec[k]!=='')t[k]=rec[k];runs.get(rec.run_id).trials.push(t);
     }return [...runs.values()];
   }
+  function runFingerprint(run){
+    const keys=['trial_id','attempt_id','attempt_number','variation_index','phase','section','block_index','trial_index','seed','stimulus_seed','search_type','set_size','policy','reliability','potential_valid','cue_shown','cue_side','target_side','gap','chart_type','support','values','labels','rotation','true_ratio','estimate','response','rt_ms','timeout','technical_invalid','excluded_reason'];
+    const rows=run.trials.map(t=>keys.map(k=>k==='response'&&run.experiment==='ratio'&&t[k]!=null?String(t[k]):t[k]??null));
+    return JSON.stringify([run.participant,run.experiment,run.mode,run.protocol,run.status,run.completed_at||null,run.mapping?.f||null,run.mapping?.j||null,rows]);
+  }
   async function importFiles(files){
-    let count=0;
-    for(const file of files){if(file.size>10*1024*1024)throw Error('请选择10 MB以内的数据文件。');const text=await file.text();let runs;
-      if(file.name.toLowerCase().endsWith('.csv'))runs=csvParse(text);else{const d=JSON.parse(text);if(d.schema!=='attention-lab/export-v1'||!Array.isArray(d.runs))throw Error('请选择本实验导出的JSON。');runs=d.runs;}
-      for(const r of runs){if(r.protocol!==C.PROTOCOL)continue;if(!['search','ratio'].includes(r.experiment)||!['formal','demo','test'].includes(r.mode)||typeof r.id!=='string'||r.id.length>120||!/^[A-Z][A-Z0-9_-]{1,11}$/.test(r.participant)||!Array.isArray(r.trials)||r.trials.length>10000)throw Error('请使用当前协议版本的匿名实验记录。');
-        for(const t of r.trials){if(typeof t.trial_id!=='string'||!['formal','practice'].includes(t.phase)||t.rt_ms!=null&&!Number.isFinite(t.rt_ms))throw Error('请检查试次编号与反应时字段。');}
-        if(!Store.all().some(existing=>existing.id===r.id)){Store.data.imports.push(r);count++;}
+    const staged=[],existing=new Map(Store.all().map(r=>[r.id,r])),withdrawals=[];let skipped=0;
+    for(const file of files){
+      if(file.size>10*1024*1024)throw Error('请选择10 MB以内的数据文件。');
+      const text=await file.text();let runs;
+      if(file.name.toLowerCase().endsWith('.csv'))runs=csvParse(text);
+      else{const d=JSON.parse(text);if(d.schema!=='attention-lab/export-v1'||!Array.isArray(d.runs))throw Error('请选择本实验导出的JSON。');runs=d.runs;}
+      for(const run of runs){
+        if(run.protocol!==C.PROTOCOL){skipped++;continue;}
+        const check=C.inspectRun(run);if(!check.ok)throw Error('导入待核对：'+check.message);
+        const prior=existing.get(run.id);
+        if(prior){
+          if(runFingerprint(prior)!==runFingerprint(run))throw Error('同一会话存在不同原始记录，请核对后导入。');
+          if(run.withdrawn&&!prior.withdrawn)withdrawals.push({prior,at:run.withdrawn_at||new Date().toISOString()});
+        }else{staged.push(run);existing.set(run.id,run);}
       }
-    }Store.save();toast(`已导入${count}份新记录`);App.results();
+    }
+    // 整批文件通过后再修改存储，错误不会留下部分导入。
+    Store.data.imports.push(...staged);
+    withdrawals.forEach(({prior,at})=>{prior.withdrawn=true;prior.withdrawn_at=at;});
+    Store.save();toast('已导入'+staged.length+'份新记录'+(skipped?'，已略过早期版本'+skipped+'份':''));App.results();
   }
   function openModal(title,body,footer='',wide=false){
-    modalFocus=document.activeElement;
+    if(!$('#modal-root .modal'))modalFocus=document.activeElement;
     $('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal ${wide?'wide':''}" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-heading"><h2 id="modal-title">${title}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div><div class="modal-body">${body}</div>${footer?`<div class="modal-footer">${footer}</div>`:''}</section></div>`;
     $('#modal-root button')?.focus();
   }
-  function closeModal(){$('#modal-root').innerHTML='';modalFocus?.focus?.();}
-  function consent(){openModal('参与说明',`<p>你将完成视觉搜索与比例判断。两项合计约8—12分钟，可按自己的节奏选择先后顺序。</p><p>实验记录匿名编号、按键、估计值、作答时长与必要的浏览器信息。匿名数据用于课程分析与结果展示。</p><p>参与完全自愿。你可以在组间休息，通过暂停结束当前参与，并凭匿名编号联系研究者撤回记录。</p><p>数据先保存到当前浏览器，也可下载备份。研究者配置课程项目后，可将匿名正式记录提交到课程收数平台。</p>`,btn('我已了解','close-modal'));}
+  function closeModal(){$('#modal-root').innerHTML='';if(modalFocus?.isConnected)modalFocus.focus();}
+  function consent(){openModal('参与说明',`<p>你将完成视觉搜索与比例判断。两项合计约8—12分钟，可按自己的节奏选择先后顺序。</p><p>实验记录匿名编号、按键、估计值、作答时长与必要的浏览器信息。匿名数据用于课程分析与结果展示。</p><p>参与完全自愿。你可以在组间休息，通过暂停结束当前参与，并凭匿名编号联系邀请你的研究者撤回记录。</p><p>数据先保存到当前浏览器，也可下载备份。研究者配置课程项目后，可将匿名正式记录提交到课程收数平台。</p>`,btn('我已了解','close-modal'));}
   function loginArt(){return `<svg viewBox="0 0 580 430" aria-hidden="true"><defs><radialGradient id="login-glow"><stop stop-color="#45647b" stop-opacity=".45"/><stop offset="1" stop-color="#152c42" stop-opacity="0"/></radialGradient></defs><circle cx="290" cy="215" r="235" fill="url(#login-glow)"/><g stroke="#7692a5" fill="none" opacity=".25"><circle cx="290" cy="215" r="181"/><circle cx="290" cy="215" r="125" stroke-dasharray="3 12"/><path d="M46 215H534M290 2v426" stroke-dasharray="3 9"/></g><g class="orbit" style="transform-origin:290px 215px"><circle cx="290" cy="34" r="5" fill="#a7bac6"/><circle cx="471" cy="215" r="3" fill="#a7bac6"/></g><g class="orbit reverse" style="transform-origin:290px 215px"><path d="M157 92A181 181 0 0 1 422 90" fill="none" stroke="#7494aa" stroke-width="2"/></g><g stroke="#738fa3" fill="none" stroke-width="2.5" opacity=".7"><circle cx="188" cy="132" r="13"/><circle cx="392" cy="132" r="13"/><circle cx="188" cy="298" r="13"/><circle cx="392" cy="298" r="13"/><circle cx="116" cy="215" r="13"/><circle cx="464" cy="215" r="13"/></g><circle cx="290" cy="215" r="62" fill="#254158" stroke="#a7b9c6" stroke-opacity=".15"/><path d="M316 192A35 35 0 1 0 316 238" fill="none" stroke="#e2ad7d" stroke-width="8" stroke-linecap="round"/><circle cx="290" cy="215" r="85" fill="none" stroke="#d3a377" stroke-opacity=".3" stroke-dasharray="2 9"/></svg>`;}
   function searchCardArt(){let shapes='';for(let r=0;r<3;r++)for(let c=0;c<6;c++){const target=r===1&&c===3;shapes+=C.glyph(92+c*64,55+r*66,target?'C':(r+c)%3===0?'O':'C',(c+r)%2?'left':'right',target?C.COLOR.orange:'#7d9bb0',13,3.4);}return `<svg viewBox="0 0 500 240" aria-hidden="true"><circle cx="284" cy="121" r="38" fill="#fff" opacity=".8"/><path d="M246 92v-9h12m52 0h12v12m0 52v12h-12m-52 0h-12v-12" fill="none" stroke="#cf8a53" stroke-width="1.2" opacity=".7"/>${shapes}</svg>`;}
   function ratioCardArt(){return `<svg viewBox="0 0 500 240" aria-hidden="true"><g transform="translate(150 125)"><circle r="70" fill="#e0d6c9"/><path d="M0 0V-70A70 70 0 0 1 62.4 31.7Z" fill="#315b7d"/><path d="M0 0 62.4 31.7A70 70 0 0 1-36 60Z" fill="#cf8652"/><circle r="33" fill="#f3eee6"/></g><path d="M256 190H425" stroke="#c8bdae"/><rect x="281" y="115" width="40" height="75" rx="3" fill="#cf8652"/><rect x="343" y="62" width="40" height="128" rx="3" fill="#315b7d"/><path d="M257 67h-16m8-8v16" stroke="#c3b8aa"/><path d="M276 211h111" stroke="#e1d8cd" stroke-dasharray="2 6"/></svg>`;}
 
+  function storageBanner(){
+  if(Store.available)return '';
+  const recovery=Store.recoveryRaw?btn('保存原始记录','export-recovery','secondary'):'';
+  return `<div class="storage-banner">当前页面保存着你的记录。完成后请下载一份备份。${recovery}</div>`;
+}
+  function withdraw(runId,confirmed=false){
+  const run=Store.run(runId);if(!run)return;
+  if(!confirmed){openModal('撤回这项实验',`<p>这项实验的本地记录将转为撤回存档，后续分析和提交排除。</p><p>已上传的记录可凭匿名编号联系邀请你的研究者，完成平台撤回。</p>`,btn('保留记录','close-modal','secondary')+btn('确认撤回','confirm-withdraw','primary',`data-run="${E(run.id)}"`));return;}
+  const at=new Date().toISOString();
+  for(const record of Store.all())if(record.participant===run.participant&&record.experiment===run.experiment&&record.protocol===run.protocol){record.withdrawn=true;record.withdrawn_at=at;}
+  Store.save();closeModal();App.records();toast('本地记录已撤回并保留存档');
+}
   const App={
     participant:null,runner:null,view:'login',pending:null,researcher:query.get('view')==='researcher',
-    canViewResults(){return this.researcher||['search','ratio'].every(e=>Store.data.runs.some(r=>r.participant===this.participant&&r.experiment===e&&r.mode==='formal'&&r.protocol===C.PROTOCOL&&r.status==='complete'));},
+    canViewResults(){return this.researcher||['search','ratio'].every(e=>Store.data.runs.some(r=>r.participant===this.participant&&r.experiment===e&&r.mode==='formal'&&!r.withdrawn&&r.protocol===C.PROTOCOL&&isComplete(r)));},
     header(){return `<header class="app-header">${brand()}<div class="header-right">${QA?'<span class="pill qa-tag">调试体验</span>':''}${this.canViewResults()?'<button class="btn btn-quiet btn-small" data-action="results">'+icon('chart',16)+'数据与结果</button>':''}<span class="header-divider"></span><span class="profile-pill"><span class="avatar">ID</span><span class="mono">${E(this.participant||'研究者')}</span></span><button class="icon-btn" data-action="menu" aria-label="更多选项">${icon('dots')}</button></div></header>`;},
     login(){this.view='login';$('#app').innerHTML=`<main id="main" class="login-shell"><section class="login-visual">${brand()}<div class="login-art">${loginArt()}</div><div class="login-note"><span>ATTENTION LAB</span><span>01 / 02</span></div></section><section class="login-content"><form class="login-form" id="login-form"><div class="login-mobile-brand">${brand()}</div><h1>从这里开始</h1><p class="muted">使用参与编号进入实验。</p><label class="field"><span class="field-label">参与编号</span><input class="text-input participant-input mono" id="participant" name="participant" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="12" placeholder="P01" required aria-describedby="id-hint"><span class="field-hint" id="id-hint">填写研究者提供的匿名编号</span></label><label class="check-line"><input id="consent" type="checkbox" required><span>我已阅读<button type="button" class="link-button" data-action="consent">参与说明</button>，并自愿参加。</span></label><button class="btn btn-primary" type="submit">进入实验 ${icon('arrow')}</button><div class="login-footer">${icon('shield',14)} <span>匿名参与 · 自动保存</span></div></form></section></main>`;
-      $('#login-form').addEventListener('submit',e=>{e.preventDefault();const id=$('#participant').value.trim().toUpperCase();if(!/^[A-Z][A-Z0-9_-]{1,11}$/.test(id)){$('#id-hint').textContent='使用2—12位编号，以英文字母开头';$('#participant').focus();return;}if(!$('#consent').checked){$('#consent').focus();return;}this.participant=id;Store.data.profiles[id]={...Store.data.profiles[id],id,consent_version:CONSENT_VERSION,consent_at:new Date().toISOString()};Store.save();try{sessionStorage.setItem(SESSION_KEY,id);}catch{}this.dashboard();});
+      $('#login-form').addEventListener('submit',e=>{e.preventDefault();const id=$('#participant').value.trim().toUpperCase();if(!/^[A-Z][A-Z0-9_-]{1,11}$/.test(id)){$('#id-hint').textContent='使用2—12位编号，以英文字母开头';$('#participant').focus();return;}if(!$('#consent').checked){$('#consent').focus();return;}this.participant=id;this.researcher=false;Store.data.profiles[id]={...Store.data.profiles[id],id,consent_version:CONSENT_VERSION,consent_at:new Date().toISOString()};Store.save();try{sessionStorage.setItem(SESSION_KEY,id);}catch{}this.dashboard();});
       $('#participant').focus({preventScroll:true});
     },
     dashboard(){
       this.runner?.destroy();this.runner=null;this.view='dashboard';this.pending=null;
-      const own=Store.data.runs.filter(r=>r.participant===this.participant&&r.mode==='formal'&&r.protocol===C.PROTOCOL),completed=new Set(own.filter(r=>r.status==='complete').map(r=>r.experiment)).size;
-      const cards=['search','ratio'].map((experiment,i)=>{const existing=own.findLast?.(r=>r.experiment===experiment)||own.filter(r=>r.experiment===experiment).slice(-1)[0];const done=existing?.status==='complete',active=existing&&!done;return `<article class="experiment-card"><div class="card-art ${experiment}"><span class="card-index">EXPERIMENT 0${i+1}</span>${done?'<span class="card-tag pill pill-green">已完成</span>':active?'<span class="card-tag pill pill-warm">已保存进度</span>':''}${experiment==='search'?searchCardArt():ratioCardArt()}</div><div class="card-body"><div class="card-title-row"><h2>${titleOf(experiment)}</h2>${icon('arrow',22)}</div><p>${experiment==='search'?'寻找目标，判断缺口方向。':'观察图形，估计两个数值的比例。'}</p><div class="card-meta"><span>${icon('clock',15)}${experiment==='search'?'约4—6分钟':'约4—6分钟'}</span><span>${icon('keyboard',15)}${experiment==='search'?'F / J':'数字输入'}</span></div><div class="card-footer"><button class="btn btn-quiet btn-small" data-action="start-demo" data-experiment="${experiment}">先体验 ${icon('play',14)}</button><button class="btn btn-primary" data-action="choose" data-experiment="${experiment}">${done?'查看记录':active?'继续实验':'开始实验'} ${icon('arrow',17)}</button></div></div></article>`;}).join('');
-      $('#app').innerHTML=`${this.header()}<main id="main" class="dashboard">${Store.available?'':'<div class="storage-banner">当前页面保存着你的记录。完成后请下载一份备份。</div>'}<div class="page-heading"><div><h1>选择实验</h1><p>按自己的节奏，完成两项任务。</p></div><div class="total-progress"><svg class="progress-ring" viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="18" fill="none" stroke="#e2e7e8" stroke-width="3"/><circle cx="22" cy="22" r="18" fill="none" stroke="#cc6b32" stroke-width="3" stroke-dasharray="${completed/2*113.1} 113.1" transform="rotate(-90 22 22)"/></svg><span>${completed} / 2 已完成</span></div></div><div class="cards">${cards}</div><div class="dashboard-foot"><span>每组结束后可休息，进度自动保存。</span><button class="link-button" data-action="consent">参与说明</button></div></main>`;
+      const own=Store.data.runs.filter(r=>r.participant===this.participant&&r.mode==='formal'&&!r.withdrawn&&r.protocol===C.PROTOCOL),completed=new Set(own.filter(isComplete).map(r=>r.experiment)).size;
+      const cards=['search','ratio'].map((experiment,i)=>{const existing=own.findLast?.(r=>r.experiment===experiment)||own.filter(r=>r.experiment===experiment).slice(-1)[0];const done=isComplete(existing),active=existing&&!done;return `<article class="experiment-card"><div class="card-art ${experiment}"><span class="card-index">EXPERIMENT 0${i+1}</span>${done?'<span class="card-tag pill pill-green">已完成</span>':active?'<span class="card-tag pill pill-warm">已保存进度</span>':''}${experiment==='search'?searchCardArt():ratioCardArt()}</div><div class="card-body"><div class="card-title-row"><h2>${titleOf(experiment)}</h2>${icon('arrow',22)}</div><p>${experiment==='search'?'寻找目标，判断缺口方向。':'观察图形，估计两个数值的比例。'}</p><div class="card-meta"><span>${icon('clock',15)}${experiment==='search'?'约4—6分钟':'约4—6分钟'}</span><span>${icon('keyboard',15)}${experiment==='search'?'F / J':'数字输入'}</span></div><div class="card-footer"><button class="btn btn-quiet btn-small" data-action="start-demo" data-experiment="${experiment}">先体验 ${icon('play',14)}</button><button class="btn btn-primary" data-action="choose" data-experiment="${experiment}">${done?'查看记录':active?'继续实验':'开始实验'} ${icon('arrow',17)}</button></div></div></article>`;}).join('');
+      $('#app').innerHTML=`${this.header()}<main id="main" class="dashboard">${storageBanner()}<div class="page-heading"><div><h1>选择实验</h1><p>按自己的节奏，完成两项任务。</p></div><div class="total-progress"><svg class="progress-ring" viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="18" fill="none" stroke="#e2e7e8" stroke-width="3"/><circle cx="22" cy="22" r="18" fill="none" stroke="#cc6b32" stroke-width="3" stroke-dasharray="${completed/2*113.1} 113.1" transform="rotate(-90 22 22)"/></svg><span>${completed} / 2 已完成</span></div></div><div class="cards">${cards}</div><div class="dashboard-foot"><span>每组结束后可休息，进度自动保存。</span><button class="link-button" data-action="consent">参与说明</button></div></main>`;
       window.scrollTo(0,0);
     },
     choose(experiment,mode='formal'){
       if(!this.participant){this.login();return;}
-      if(mode==='formal'&&!QA){const r=Store.data.runs.filter(r=>r.participant===this.participant&&r.experiment===experiment&&r.mode==='formal'&&r.protocol===C.PROTOCOL).slice(-1)[0];if(r?.status==='complete'){this.finish(r);return;}if(r){this.launch(r,true);return;}}
+      if(mode==='formal'&&!QA){const r=Store.data.runs.filter(r=>r.participant===this.participant&&r.experiment===experiment&&r.mode==='formal'&&!r.withdrawn&&r.protocol===C.PROTOCOL).slice(-1)[0];if(isComplete(r)){this.finish(r);return;}if(r){this.launch(r,true);return;}}
       this.pending={experiment,mode:QA?'test':mode};this.view='instructions';const index=C.assignment(this.participant),mapping=index%2?{f:'right',j:'left'}:{f:'left',j:'right'};
       const directions=['left','right'].map(d=>{const key=Object.keys(mapping).find(k=>mapping[k]===d).toUpperCase();return `<div class="key-example"><svg viewBox="0 0 56 56" aria-hidden="true">${C.glyph(28,28,'C',d,C.COLOR.orange,18,5)}</svg><div><span class="keycap">${key}</span><small class="muted">缺口向${d==='left'?'左':'右'}</small></div></div>`;}).join('');
       const demo=experiment==='search'?directions:`<div class="fraction-demo"><div class="mini-bars"><i data-label="A" style="height:38px;background:var(--orange)"></i><i data-label="B" style="height:76px;background:var(--blue)"></i></div><div class="ratio-equation mono">20 ÷ 40 = 50%<small>A是B的一半</small></div></div>`;
       $('#app').innerHTML=`${this.header()}<main id="main" class="instruction-page"><button class="btn btn-quiet btn-small back-btn" data-action="home">${icon('back',16)}实验选择</button><section class="instruction-panel"><div class="instruction-top"><span class="eyebrow">${experiment==='search'?'VISUAL SEARCH':'PROPORTION JUDGMENT'}</span><span class="pill ${mode!=='formal'||QA?'pill-warm':''}">${mode!=='formal'||QA?'体验':'正式参与'}</span></div><h1>${experiment==='search'?'寻找橙色 C':'估计 A 与 B 的比例'}</h1><p class="lead">${experiment==='search'?'按目标缺口的方向作答。':'输入 A 相当于 B 的百分数。'}</p><div class="instruction-demo">${demo}</div><div class="instruction-lines">${experiment==='search'?`<div class="instruction-line"><span class="num">1</span><span>每幅画面都有一个橙色 C。</span></div><div class="instruction-line"><span class="num">2</span><span>位置箭头提供参考，答案以目标缺口为准。</span></div>`:`<div class="instruction-line"><span class="num">1</span><span>B是参照量，答案范围为0—100。</span></div><div class="instruction-line"><span class="num">2</span><span>根据图形作视觉估计，按 Enter 提交。</span></div>`}</div><div class="instruction-bottom"><span class="muted">先完成练习，再进入${mode!=='formal'||QA?'体验':'正式'}任务。</span>${btn('开始练习 '+icon('arrow'),'begin')}</div></section></main>`;window.scrollTo(0,0);
     },
     begin(){if(!this.pending)return;const {experiment,mode}=this.pending;let run;if(QA&&query.get('qa')==='full'){run=C.makeRun(experiment,this.participant,'formal');run.mode='test';}else run=C.makeRun(experiment,this.participant,mode);
-      const own=Store.data.runs.filter(r=>r.participant===this.participant&&r.mode===mode&&r.protocol===C.PROTOCOL);run.experiment_order=[...new Set([...own.map(r=>r.experiment),experiment])].join('→');run.consent_version=CONSENT_VERSION;run.environment={width:innerWidth,height:innerHeight,ua:navigator.userAgent.slice(0,80),devicePixelRatio};Store.upsert(run);this.pending=null;this.launch(run,false);
+      const own=Store.data.runs.filter(r=>r.participant===this.participant&&r.mode===mode&&r.protocol===C.PROTOCOL);run.experiment_order=[...new Set([...own.map(r=>r.experiment),experiment])].join('→');run.consent_version=CONSENT_VERSION;run.consent_at=Store.data.profiles[this.participant]?.consent_at;run.environment={width:innerWidth,height:innerHeight,ua:navigator.userAgent.slice(0,80),devicePixelRatio};Store.upsert(run);this.pending=null;this.launch(run,false);
     },
-    launch(run,resume){this.runner?.destroy();this.view='trial';this.runner=new Runner(run);this.runner.mount(resume);},
-    finish(run){this.runner?.destroy();this.runner=null;this.view='finish';const rows=C.formalRows(run),valid=rows.filter(t=>!t.timeout),accuracy=run.experiment==='search'?C.mean(rows.map(t=>t.correct?1:0)):null;const remaining=run.mode==='formal'?['search','ratio'].find(e=>e!==run.experiment&&!Store.data.runs.some(r=>r.participant===this.participant&&r.experiment===e&&r.mode==='formal'&&r.protocol===C.PROTOCOL&&r.status==='complete')):null;
+    launch(run,resume){
+      let schedule=Array.isArray(run.blocks)&&run.blocks.length>0&&run.blocks.every(b=>b&&typeof b.section==='string'&&Array.isArray(b.trials)&&b.trials.length>0);
+      try{if(schedule)for(const b of run.blocks)for(const t of b.trials)C.normalizeTrial({...t,timeout:true},run);}catch{schedule=false;}
+      const check=C.inspectRun(run),cursor=run.cursor&&Number.isInteger(run.cursor.block)&&run.cursor.block>=0&&Number.isInteger(run.cursor.trial)&&run.cursor.trial>=0&&(run.cursor.block<run.blocks?.length&&run.cursor.trial<=run.blocks?.[run.cursor.block]?.trials?.length||run.cursor.block===run.blocks?.length&&run.cursor.trial===0),practice=run.practice_done&&typeof run.practice_done==='object'&&run.practice_rounds&&typeof run.practice_rounds==='object';
+      if(!check.ok||!schedule||!cursor||!practice){openModal('记录待核对','<p>原始记录已保留。下载备份后，可交由研究者核对。</p>',btn('下载备份','export-run','primary',`data-run="${E(run.id)}"`)+btn('返回','close-modal','secondary'));return;}
+      this.runner?.destroy();this.view='trial';this.runner=new Runner(run);this.runner.mount(resume);
+    },
+    finish(run){this.runner?.destroy();this.runner=null;this.view='finish';const rows=C.analysisRows(run),valid=rows.filter(t=>!t.timeout),accuracy=run.experiment==='search'?C.mean(rows.map(t=>t.correct?1:0)):null;const remaining=run.mode==='formal'?['search','ratio'].find(e=>e!==run.experiment&&!Store.data.runs.some(r=>r.participant===this.participant&&r.experiment===e&&r.mode==='formal'&&!r.withdrawn&&r.protocol===C.PROTOCOL&&isComplete(r))):null;
       $('#app').innerHTML=`${this.header()}<main id="main"><section class="finish-panel"><div class="finish-check">${icon('check',34)}</div><h1>${titleOf(run.experiment)}${run.mode==='formal'?'已完成':'体验已完成'}</h1><p>${run.mode==='formal'?'感谢你的参与。':'体验记录已单独标记。'}</p><div class="finish-stats"><div class="finish-stat"><strong>${rows.length}</strong><small>${run.mode==='formal'?'正式试次':'体验试次'}</small></div><div class="finish-stat"><strong>${run.experiment==='search'?fmt(accuracy*100)+'%':fmt(C.mean(valid.map(t=>t.absolute_error)),1)}</strong><small>${run.experiment==='search'?'正确率':'平均误差 · 百分点'}</small></div></div><div class="save-state">${icon('check',15)}<span id="finish-save-label">${Store.available?'已保存到当前浏览器':'当前页面保留着记录，请下载备份'}</span></div><div class="actions center">${remaining?`<button class="btn btn-primary" data-action="choose" data-experiment="${remaining}">继续${titleOf(remaining)} ${icon('arrow',17)}</button>`:btn('返回实验选择','home')}${btn('保存 JSON','export-run','secondary',`data-run="${E(run.id)}"`)}</div><div class="download-row"><button class="link-button" data-action="export-run-csv" data-run="${E(run.id)}">下载CSV</button><button class="link-button" data-action="home">实验选择</button></div></section></main>`;
-      if(Store.data.settings.autoUpload&&Store.data.settings.project&&run.mode==='formal'&&run.upload?.status!=='confirmed')submitRun(run).then(()=>{const label=$('#finish-save-label');if(label)label.textContent=run.upload.status==='confirmed'?'已保存，并提交至课程平台':'已保存到当前浏览器';});window.scrollTo(0,0);
+      if(Store.data.settings.autoUpload&&Store.data.settings.project&&run.mode==='formal'&&uploadState(run).status!=='confirmed')submitRun(run).then(()=>{const label=$('#finish-save-label');if(label)label.textContent=uploadState(run).status==='confirmed'?'已保存，并提交至课程平台':'已保存到当前浏览器';});window.scrollTo(0,0);
     },
     menu(){openModal('选项',`<div class="record-list"><button class="btn btn-secondary" data-action="consent">参与说明</button><button class="btn btn-secondary" data-action="records">我的记录</button>${this.researcher?'<button class="btn btn-secondary" data-action="results">数据与结果</button><button class="btn btn-secondary" data-action="design">研究说明</button><button class="btn btn-secondary" data-action="settings">课程项目</button><button class="btn btn-secondary" data-action="participant-view">参与者视图</button>':'<button class="btn btn-secondary" data-action="researcher">研究者视图</button>'}<button class="btn btn-quiet" data-action="logout">退出登录</button></div>`);},
-    records(){const runs=Store.data.runs.filter(r=>r.participant===this.participant);openModal('我的记录',runs.length?`<div class="record-list">${runs.map(r=>`<div class="record-item"><div><strong>${titleOf(r.experiment)} · ${r.mode==='formal'?'正式':r.mode==='test'?'调试体验':'体验'}</strong><small>${dateOf(r.created_at)} · ${r.status==='complete'?'已完成':'已保存进度'}${r.protocol!==C.PROTOCOL?' · 早期版本':''}</small></div><button class="btn btn-secondary btn-small" data-action="export-run" data-run="${E(r.id)}">下载JSON</button></div>`).join('')}</div>`:'<p>完成一组任务后，记录会显示在这里。</p>',btn('完成','close-modal'));},
+    records(){
+  const runs=Store.data.runs.filter(r=>r.participant===this.participant);
+  const content=runs.length?`<div class="record-list">${runs.map(r=>`<div class="record-item"><div><strong>${titleOf(r.experiment)} · ${r.mode==='formal'?'正式':r.mode==='test'?'调试体验':'体验'}</strong><small>${dateOf(r.created_at)} · ${r.withdrawn?'本地已撤回':r.status==='complete'?'已完成':r.status==='review'?'待核对':'已保存进度'}${r.protocol!==C.PROTOCOL?' · 早期版本':''}</small></div><div class="actions"><button class="btn btn-secondary btn-small" data-action="export-run" data-run="${E(r.id)}">下载JSON</button>${r.withdrawn?'':`<button class="btn btn-quiet btn-small" data-action="withdraw" data-run="${E(r.id)}">撤回</button>`}</div></div>`).join('')}</div>`:'<p>完成一组任务后，记录会显示在这里。</p>';
+  openModal('我的记录',content,btn('完成','close-modal'));
+},
     settings(){openModal('课程项目',`<p>填写课程收数平台生成的6位项目码。</p><div class="upload-box"><label class="field-label" for="project-code">项目码</label><div class="config-row"><input class="text-input mono" id="project-code" maxlength="6" autocomplete="off" value="${E(Store.data.settings.project)}" placeholder="ABC234">${btn('保存','save-project','primary')}</div><label class="check-line"><input type="checkbox" id="auto-upload" ${Store.data.settings.autoUpload?'checked':''}><span>正式实验完成后自动提交</span></label></div><p class="smallprint">项目码保存在当前浏览器。课程平台使用<a href="${LAB}/hw2" target="_blank" rel="noopener">项目管理页面</a>提供下载密钥。</p>`,btn('完成','close-modal'));},
     design(){openModal('研究说明',`<h3>视觉搜索</h3><p>复现特征与联合搜索，比较持续提示和择机提示。目标是评估不完美辅助下的提示收益与误导成本。</p><p>主要比较：低可靠情境中，持续提示与择机提示的正确反应时差；同步报告错误率和整体表现。</p><h3>比例判断</h3><p>比较条形图与饼图，以及主图、对齐比较窗。目标是评估辅助表示的估计误差和时间代价。</p><p>主要比较：饼图中，主图与对齐比较窗的绝对误差差。</p><details><summary>设计与分析</summary><p>同一参与者完成每项实验的全部条件。正式搜索60次，比例判断40次；实验先后自由选择并记录，实验内部条件顺序按编号平衡。</p><p>先按被试汇总，再做配对分析。每名被试每项实验取最近一次完整正式记录；体验、调试和练习单独保留。主要结果显示被试层面的区间，并对两项主要检验作Holm校正。</p><p>正式数据足够时展示实测结果；出处结论、方案预测与实测结果分别记录。</p></details><details><summary>参考研究</summary><ul><li><a href="https://doi.org/10.1016/0010-0285(80)90005-5" target="_blank" rel="noopener">Treisman与Gelade，1980 · 特征整合</a></li><li><a href="https://pubmed.ncbi.nlm.nih.gov/7381367/" target="_blank" rel="noopener">Posner等，1980 · 注意线索</a></li><li><a href="https://arxiv.org/abs/2303.14300" target="_blank" rel="noopener">Warden等，2023 · 不完美自动化提示</a></li><li><a href="https://doi.org/10.1080/01621459.1984.10478080" target="_blank" rel="noopener">Cleveland与McGill，1984 · 图形感知</a></li><li><a href="https://arxiv.org/abs/2203.05109" target="_blank" rel="noopener">Yang等，2022 · 细节视图</a></li></ul></details><p class="smallprint">协议 ${C.PROTOCOL} · AI协助程序实现、验证与图表。研究问题、预测和解释由作业作者审阅定稿。</p>`,btn('完成','close-modal'),true);},
     results(){
       if(this.runner){this.runner.pause('查看数据');this.runner.destroy();this.runner=null;}
       this.view='results';closeModal();const local=C.analyze(Store.all()),fromSnapshot=local.completed_runs===0&&window.LAB_SNAPSHOT?.analysis?.protocol===C.PROTOCOL&&window.LAB_SNAPSHOT.analysis;const report=fromSnapshot?window.LAB_SNAPSHOT.analysis:local;this.report=report;
       const search=report.groups.search,ratio=report.groups.ratio,has=report.completed_runs>0;
-      const effect=(g,unit)=>{const p=g.effects.primary;if(!p?.n)return '<div class="effect-caption">有效配对数据会显示在这里。</div>';return `<div class="effect-row"><span>${unit==='ms'?'持续 − 择机 · 低可靠':'主图 − 比较窗 · 饼图'} · n=${p.n}</span><strong>${fmt(p.mean,unit==='ms'?0:2)} ${unit}</strong></div><p class="effect-caption">${p.ci?`被试层面95%探索性区间 [${fmt(p.ci[0],1)}, ${fmt(p.ci[1],1)}]`:'配对人数达到5人后计算区间'}${p.p_holm!=null?` · Holm p=${fmt(p.p_holm,3)}`:''}</p>`;};
-      const table=[search,ratio].flatMap(g=>g.subjects.map(s=>`<tr><td class="mono">${E(s.participant)}</td><td>${titleOf(s.experiment)}</td><td>${s.raw_count}</td><td>${s.valid_count}</td><td>${s.quality?'已纳入':'任务遵循检查'}</td><td>${fmt(s.effects.primary,2)}</td></tr>`)).join('');
-      $('#app').innerHTML=`${this.header()}<main id="main" class="results-page"><div class="results-top"><div><h1>数据与结果</h1><p>${fromSnapshot?'归档结果快照':'当前设备与已导入的正式记录'}</p></div><div class="actions"><button class="btn btn-secondary btn-small" data-action="import">${icon('upload',15)}导入记录</button><button class="btn btn-primary btn-small" data-action="export-all">${icon('download',15)}导出JSON</button>${btn('实验选择','home','quiet')}</div></div><input class="hidden" type="file" id="import-files" accept=".json,.csv" multiple><div class="metric-grid"><div class="metric-card"><small>匿名参与者</small><strong>${report.participants}<em>人</em></strong></div><div class="metric-card"><small>搜索 · 完整记录</small><strong>${search.n}<em>/ 5 人</em></strong></div><div class="metric-card"><small>比例 · 完整记录</small><strong>${ratio.n}<em>/ 5 人</em></strong></div></div>${has?`<div class="result-grid"><section class="result-card"><h2>视觉搜索</h2><p>经典搜索 · 固定24项</p><div class="result-plot">${linePlot(search)}</div>${effect(search,'ms')}</section><section class="result-card"><h2>比例判断</h2><p>两种辅助方式 · 平均绝对误差</p><div class="result-plot">${barPlot(ratio)}</div>${effect(ratio,'百分点')}</section></div><details class="details-card"><summary>配对与质量检查</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>编号</th><th>实验</th><th>正式试次</th><th>有效作答</th><th>质量</th><th>主要配对差</th></tr></thead><tbody>${table}</tbody></table></div></details><details class="details-card"><summary>条件明细</summary><div class="table-scroll">${conditionTable(report)}</div></details>${pairedHTML(report)}${evidenceHTML(report)}`:`<div class="empty-results"><div><div class="empty-graphic">${icon('chart',90)}</div><p>正式记录会生成真实结果。</p><p class="smallprint">体验与调试记录单独保存。</p></div></div>`}<div class="data-actions">${btn('研究说明','design','secondary')}${btn('下载CSV','export-all-csv','secondary')}${has?btn('导出离线结果','snapshot','secondary'):''}${btn('提交记录','upload-list','quiet')}</div><p class="results-note">正配对差表示改进条件在对应指标上更优。速度、准确性与超时结合解释；小样本区间用于探索。</p></main>`;
+      const effect=(g,unit)=>effectHTML(g,unit);
+      const table=[search,ratio].flatMap(g=>g.subjects.map(s=>`<tr><td class="mono">${E(s.participant)}</td><td>${titleOf(s.experiment)}</td><td>${s.raw_count}</td><td>${s.valid_count}</td><td>${!s.quality?'任务遵循检查':Number.isFinite(s.effects.primary)?'主要配对有效':'有效作答不足'}</td><td>${fmt(s.effects.primary,2)}</td></tr>`)).join('');
+      $('#app').innerHTML=`${this.header()}<main id="main" class="results-page"><div class="results-top"><div><h1>数据与结果</h1><p>${fromSnapshot?'归档结果快照':'当前设备与已导入的正式记录'}</p></div><div class="actions"><button class="btn btn-secondary btn-small" data-action="import">${icon('upload',15)}导入记录</button><button class="btn btn-primary btn-small" data-action="export-all">${icon('download',15)}导出JSON</button>${btn('实验选择','home','quiet')}</div></div><input class="hidden" type="file" id="import-files" accept=".json,.csv" multiple><div class="metric-grid"><div class="metric-card"><small>匿名参与者</small><strong>${report.participants}<em>人</em></strong></div><div class="metric-card"><small>搜索 · 有效配对</small><strong>${search.analyzable_n??search.effects.primary?.n??0}<em>/ 5 人</em></strong></div><div class="metric-card"><small>比例 · 有效配对</small><strong>${ratio.analyzable_n??ratio.effects.primary?.n??0}<em>/ 5 人</em></strong></div></div>${has?`<div class="result-grid"><section class="result-card"><h2>视觉搜索</h2><p>经典搜索 · 固定24项</p><div class="result-plot">${linePlot(search)}</div>${effect(search,'ms')}</section><section class="result-card"><h2>比例判断</h2><p>两种辅助方式 · 平均绝对误差</p><div class="result-plot">${barPlot(ratio)}</div>${effect(ratio,'百分点')}</section></div><details class="details-card"><summary>配对与质量检查</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>编号</th><th>实验</th><th>正式试次</th><th>有效作答</th><th>质量</th><th>主要配对差</th></tr></thead><tbody>${table}</tbody></table></div></details><details class="details-card"><summary>条件明细</summary><div class="table-scroll">${conditionTable(report)}</div></details>${pairedHTML(report)}${evidenceHTML(report)}`:`<div class="empty-results"><div><div class="empty-graphic">${icon('chart',90)}</div><p>正式记录会生成真实结果。</p><p class="smallprint">体验与调试记录单独保存。</p></div></div>`}${diagnosticsHTML(report)}<div class="data-actions">${btn('研究说明','design','secondary')}${btn('下载CSV','export-all-csv','secondary')}${has?btn('导出离线结果','snapshot','secondary'):''}${btn('提交记录','upload-list','quiet')}</div><p class="results-note">主要配对差为正表示改进条件在该指标上更优；时间代价为正表示更慢。速度、准确性与超时结合解释。</p></main>`;
       $('#import-files').addEventListener('change',async e=>{try{await importFiles(e.target.files);}catch(err){toast(err.message||'请选择可读取的实验数据。');}});window.scrollTo(0,0);
     },
     dispatch(action,el){
@@ -132,9 +189,12 @@
       else if(action==='settings')this.settings();
       else if(action==='design')this.design();
       else if(action==='results')this.results();
-      else if(action==='logout'){closeModal();if(this.runner){this.runner.pause('退出');this.runner.destroy();this.runner=null;}this.participant=null;try{sessionStorage.removeItem(SESSION_KEY);}catch{}this.login();}
+      else if(action==='logout'){closeModal();if(this.runner){this.runner.pause('退出');this.runner.destroy();this.runner=null;}this.participant=null;this.researcher=false;try{sessionStorage.removeItem(SESSION_KEY);}catch{}this.login();}
       else if(action==='export-run')exportJSON([Store.run(el.dataset.run)].filter(Boolean));
       else if(action==='export-run-csv')exportCSV([Store.run(el.dataset.run)].filter(Boolean));
+      else if(action==='withdraw')withdraw(el.dataset.run);
+      else if(action==='confirm-withdraw')withdraw(el.dataset.run,true);
+      else if(action==='export-recovery')download('注意实验室_原始浏览器记录.txt',Store.recoveryRaw||'','text/plain;charset=utf-8');
       else if(action==='export-all')exportJSON(Store.all());
       else if(action==='export-all-csv')exportCSV(Store.all());
       else if(action==='import')$('#import-files')?.click();
@@ -146,6 +206,16 @@
     }
   };
 
+  function effectHTML(group,unit){
+  const p=group.effects.primary;if(!p?.n)return '<div class="effect-caption">有效配对数据会显示在这里。</div>';
+  const companion=unit==='ms'?group.effects.low_error:group.effects.time_cost;
+  const companionText=companion?.n?`<div class="effect-row"><span>${unit==='ms'?'同组错误率差 · 持续−择机':'时间代价 · 比较窗−主图'} · n=${companion.n}</span><strong>${fmt(companion.mean*(unit==='ms'?100:1),unit==='ms'?1:0)} ${unit==='ms'?'百分点':'ms'}</strong></div>`:'';
+  return `<div class="effect-row"><span>${unit==='ms'?'持续 − 择机 · 低可靠':'主图 − 比较窗 · 饼图'} · n=${p.n}</span><strong>${fmt(p.mean,unit==='ms'?0:2)} ${unit}</strong></div><p class="effect-caption">${p.ci?`被试层面95%探索性区间 [${fmt(p.ci[0],1)}, ${fmt(p.ci[1],1)}]`:'配对人数达到5人后计算区间'}${p.p_holm!=null?` · Holm p=${fmt(p.p_holm,3)}`:''}</p>${companionText}`;
+}
+  function diagnosticsHTML(report){
+  if(!report.diagnostics?.length)return '';
+  return `<details class="details-card"><summary>存档与待核对记录 · ${report.diagnostics.length}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>编号</th><th>实验</th><th>说明</th></tr></thead><tbody>${report.diagnostics.map(d=>`<tr><td>${E(d.participant)}</td><td>${E(titleOf(d.experiment))}</td><td>${E(d.reason)}</td></tr>`).join('')}</tbody></table></div></details>`;
+}
   function linePlot(group){
     const types=['feature','conjunction'],values=types.map(t=>group.cells['classic:'+t+':24']?.rt).filter(Number.isFinite);
     if(!values.length)return '<div class="plot-empty">'+icon('chart',24)+'经典条件有效数据积累中</div>';
@@ -179,34 +249,47 @@
   function evidenceHTML(report){
     const a=report.groups.search.effects,b=report.groups.ratio.effects;
     const row=(name,e,unit,reference)=>`<tr><td>${name}</td><td>${e?.n||0}</td><td>${fmt(e?.mean,2)} ${unit}</td><td>${reference}</td></tr>`;
-    return `<details class="details-card"><summary>经典复现与文献对照</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>比较</th><th>配对n</th><th>实测差值</th><th>解释参照</th></tr></thead><tbody>${row('联合−特征搜索RT',a.classic,'ms','经典预测：正向')}${row('饼图−条形图，无辅助AE',b.classic,'百分点','经典预测：正向')}${row('持续−择机，整体RT',a.overall,'ms','高低可靠各占一半')}${row('对齐窗−主图，饼图时长',b.time_cost,'ms','正值代表额外时间')}</tbody></table></div><div class="effect-caption" style="padding:16px 24px">经典效应按方向比较。自绘材料、样本和汇总方式与原文存在差异；AE与原文LAE分别报告。来源见研究说明。</div></details>`;
+    return `<details class="details-card"><summary>经典复现与文献对照</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>比较</th><th>配对n</th><th>实测差值</th><th>解释参照</th></tr></thead><tbody>${row('联合−特征搜索RT',a.classic,'ms','特征/联合差异 · 固定24项概念复现')}${row('饼图−条形图，无辅助AE',b.classic,'百分点','共同基线位置判断 · 比较误差方向')}${row('持续−择机，整体RT',a.overall,'ms','高低可靠各占一半')}${row('对齐窗−主图，饼图时长',b.time_cost,'ms','正值代表额外时间')}</tbody></table></div><div class="effect-caption" style="padding:16px 24px">经典效应按方向比较。自绘材料、样本和汇总方式与原文存在差异；AE与原文LAE分别报告。来源见研究说明。</div></details>`;
   }
 
   function conditionTable(report){let rows='';for(const name of ['search','ratio'])for(const cell of Object.values(report.groups[name].cells)){const parts=cell.key.split(':'),label=parts[0]==='classic'?`${parts[1]==='feature'?'特征':'联合'} · ${parts[2]}项`:parts[0]==='aid'?`${C.POLICY_NAMES[parts[1]]} · ${parts[2]==='high'?'较可靠':'低可靠'}`:parts[0]==='ratio'?`${parts[1]==='bar'?'条形图':'饼图'} · ${C.SUPPORT_NAMES[parts[2]]}`:null;if(label)rows+=`<tr><td>${label}</td><td>${cell.n}</td><td>${fmt(cell.rt)}</td><td>${fmt(cell.ae,2)}</td><td>${fmt(cell.error==null?null:cell.error*100,1)}${cell.error!=null?'%':''}</td><td>${fmt(cell.lae,2)}</td></tr>`;}
     return `<table class="data-table"><thead><tr><th>条件</th><th>有效n</th><th>时间ms</th><th>AE百分点</th><th>错误率</th><th>LAE</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
+  function uploadState(run,project=Store.data.settings.project){return run.upload_history?.[project]||(run.upload?.project===project?run.upload:{status:'local',project});}
+  function saveUpload(run,project,state){const value={project,...state};run.upload_history=run.upload_history||{};run.upload_history[project]=value;run.upload=value;Store.save();}
   async function submitRun(run,retry=false){
-    const project=Store.data.settings.project;if(!project){App.settings();return;}
-    if(QA||run.mode!=='formal'||run.status!=='complete'||run.protocol!==C.PROTOCOL){toast('课程平台接收已完成的正式记录');return;}
-    if(run.upload?.status==='confirmed'){toast('这份记录已提交');return;}if(run.upload?.status==='sending')return;
-    if(run.upload?.status==='uncertain'&&!retry){toast('核对课程记录后，选择确认重试。');return;}
-    const body=JSON.stringify(C.payload(run,project));if(new TextEncoder().encode(body).length>256*1024){toast('请先下载记录，再分批核对提交。');return;}
-    run.upload={status:'sending',project,time:new Date().toISOString()};Store.save();const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),15000);
-    try{const res=await fetch(LAB+'/api/hw2/submit',{method:'POST',headers:{'Content-Type':'application/json'},body,signal:abort.signal});let data;try{data=await res.json();}catch{throw Error('回执待核对');}
-      if(res.ok&&data.ok===true){run.upload={status:'confirmed',project,time:new Date().toISOString()};toast('课程平台已确认接收');}
-      else if(data.ok===false){run.upload={status:'error',project,message:String(data.msg||'请核对项目码与数据字段').slice(0,200)};toast(run.upload.message);}
-      else throw Error('回执待核对');
-    }catch{run.upload={status:'uncertain',project,time:new Date().toISOString()};toast('记录已保存在本地，平台接收情况待核对。');}finally{clearTimeout(timer);Store.save();}
-  }
-  function uploadList(){const runs=Store.all().filter(r=>r.mode==='formal'&&r.protocol===C.PROTOCOL&&r.status==='complete');openModal('提交记录',`<p>${Store.data.settings.project?'课程项目 '+E(Store.data.settings.project):'先在课程项目中填写6位项目码。'}</p><div class="record-list">${runs.length?runs.map(r=>`<div class="record-item"><div><strong>${E(r.participant)} · ${titleOf(r.experiment)}</strong><small>${({local:'本地已保存',sending:'提交中',confirmed:'平台已确认',uncertain:'平台接收待核对',error:'请核对项目配置'})[r.upload?.status||'local']}</small></div>${r.upload?.status==='confirmed'?'<span class="pill pill-green">已提交</span>':`<button class="btn btn-secondary btn-small" data-action="${r.upload?.status==='uncertain'?'retry-upload':'upload-run'}" data-run="${E(r.id)}">${r.upload?.status==='uncertain'?'已核对，重试':'提交'}</button>`}</div>`).join(''):'<p>完整正式记录会显示在这里。</p>'}</div>`,btn('课程项目','settings','secondary')+btn('完成','close-modal'));}
+  const project=Store.data.settings.project;if(!project){App.settings();return;}
+  if(QA||run.mode!=='formal'||run.status!=='complete'||run.withdrawn||run.protocol!==C.PROTOCOL){toast('课程平台接收已完成的正式记录');return;}
+  const integrity=C.inspectRun(run);if(!integrity.ok){toast('记录待核对：'+integrity.message);return;}
+  const current=uploadState(run,project);
+  if(current.status==='confirmed'){toast('这份记录已提交至当前项目');return;}if(current.status==='sending')return;
+  if(current.status==='uncertain'&&!retry){toast('核对课程记录后，选择确认重试。');return;}
+  const body=JSON.stringify(C.payload(run,project));if(new TextEncoder().encode(body).length>256*1024){toast('请先下载记录，再核对提交。');return;}
+  saveUpload(run,project,{status:'sending',time:new Date().toISOString()});
+  const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),15000);
+  try{
+    const res=await fetch(LAB+'/api/hw2/submit',{method:'POST',headers:{'Content-Type':'application/json'},body,signal:abort.signal});
+    let data;try{data=await res.json();}catch{throw Error('回执待核对');}
+    if(res.ok&&data.ok===true){saveUpload(run,project,{status:'confirmed',time:new Date().toISOString()});toast('课程平台已确认接收');}
+    else if(data.ok===false){saveUpload(run,project,{status:'error',message:String(data.msg||'请核对项目码与数据字段').slice(0,200)});toast(uploadState(run,project).message);}
+    else throw Error('回执待核对');
+  }catch{saveUpload(run,project,{status:'uncertain',time:new Date().toISOString()});toast('记录已保存在本地，平台接收情况待核对。');}
+  finally{clearTimeout(timer);}
+}
+  function uploadList(){
+  const runs=Store.all().filter(r=>r.mode==='formal'&&r.protocol===C.PROTOCOL&&r.status==='complete'&&!r.withdrawn);
+  const stateLabel={local:'本地已保存',sending:'提交中',confirmed:'平台已确认',uncertain:'平台接收待核对',error:'请核对项目配置'};
+  const content=runs.length?runs.map(r=>{const current=uploadState(r);return `<div class="record-item"><div><strong>${E(r.participant)} · ${titleOf(r.experiment)}</strong><small>${stateLabel[current.status]||'待核对'}</small></div>${current.status==='confirmed'?'<span class="pill pill-green">已提交</span>':`<button class="btn btn-secondary btn-small" data-action="${current.status==='uncertain'?'retry-upload':'upload-run'}" data-run="${E(r.id)}" ${current.status==='sending'?'disabled':''}>${current.status==='uncertain'?'已核对，重试':current.status==='sending'?'提交中':'提交'}</button>`}</div>`;}).join(''):'<p>完整正式记录会显示在这里。</p>';
+  openModal('提交记录',`<p>${Store.data.settings.project?'课程项目 '+E(Store.data.settings.project):'先在课程项目中填写6位项目码。'}</p><div class="record-list">${content}</div>`,btn('课程项目','settings','secondary')+btn('完成','close-modal'));
+}
 
   class Runner {
-    constructor(run){this.run=run;this.state='idle';this.timer=null;this.frame=null;this.token=0;this.current=null;this.practice=[];this.practiceIndex=0;this.isPractice=false;this.section=null;this.attempt=0;this.destroyed=false;this.dimensions=[innerWidth,innerHeight];}
+    constructor(run){this.run=run;this.state='idle';this.timer=null;this.frame=null;this.token=0;this.current=null;this.practice=[];this.practiceIndex=0;this.isPractice=false;this.section=null;this.attempt=0;this.destroyed=false;this.overlayState=null;this.pausedOverlay=null;this.dimensions=[innerWidth,innerHeight];}
     mount(resume){
       $('#app').innerHTML=`<main id="main" class="trial-shell"><header class="trial-header"><div class="trial-title">${mark()}<h1>${titleOf(this.run.experiment)}<small>${E(this.run.participant)}</small></h1><span class="pill ${this.run.mode!=='formal'?'pill-warm':''}" id="phase-label">准备</span></div><div class="trial-header-right"><span class="trial-counter mono" id="trial-counter"></span><button class="icon-btn" data-action="runner-fullscreen" aria-label="全屏">${icon('expand',18)}</button><button class="icon-btn" data-action="runner-pause" aria-label="暂停">${icon('pause',18)}</button></div></header><div class="trial-progress" role="progressbar" aria-label="正式试次进度" aria-valuemin="0" aria-valuemax="100"><span id="trial-progress-fill"></span></div><div class="trial-workspace"><div class="stage-top"><span id="stage-label"></span><span id="block-label"></span></div><div class="trial-stage" id="trial-stage"></div><div class="response-bar" id="response-bar"></div></div></main>`;
-      if(resume){const block=this.run.cursor.block;for(const t of this.run.trials)if(t.phase==='formal'&&t.block_index===block&&!t.excluded_reason)t.excluded_reason='restarted_block';this.run.cursor.trial=0;this.run.pending_trial=null;Store.upsert(this.run);}
-      this.updateHUD();this.renderResponse();this.intro(resume);this.checkSize();
+      if(resume){const block=this.run.cursor.block;const pending=this.run.pending_trial?.spec;if(pending&&!this.run.trials.some(t=>t.attempt_id===pending.attempt_id))this.run.trials.push({...pending,response:null,rt_ms:null,timeout:false,technical_invalid:true,excluded_reason:'interrupted_session'});this.run.block_restarts=this.run.block_restarts||{};if(this.run.trials.some(t=>t.block_index===block))this.run.block_restarts[block]=(this.run.block_restarts[block]||0)+1;for(const t of this.run.trials)if(t.phase==='formal'&&t.block_index===block&&!t.excluded_reason)t.excluded_reason='restarted_block';this.run.cursor.trial=0;this.run.pending_trial=null;Store.upsert(this.run);}
+      this.run.runtime_versions=[...new Set([...(this.run.runtime_versions||[this.run.version]),C.VERSION])];this.updateHUD();this.renderResponse();this.intro(resume);this.checkSize();
     }
     clear(){this.token++;clearTimeout(this.timer);if(this.frame)cancelAnimationFrame(this.frame);this.timer=null;this.frame=null;}
     later(ms,fn){const token=this.token;this.timer=setTimeout(()=>{if(!this.destroyed&&token===this.token)fn();},FAST_QA?(ms>=5000?900:Math.max(5,ms*.012)):ms);}
@@ -217,7 +300,7 @@
       if(this.run.experiment==='search'){$('#response-bar').innerHTML=['left','right'].map(d=>{const key=Object.keys(this.run.mapping).find(k=>this.run.mapping[k]===d).toUpperCase();return `<div class="response-key"><span class="keycap">${key}</span><span>缺口向${d==='left'?'左':'右'}</span></div>`;}).join('');}
       else{$('#response-bar').innerHTML=`<form id="ratio-form" class="ratio-response"><label class="ratio-question" for="estimate">A 是 B 的</label><span class="number-wrap"><input id="estimate" aria-label="估计百分数" type="number" min="0" max="100" step="0.1" inputmode="decimal" autocomplete="off" required disabled><span>%</span></span><button class="btn btn-primary" id="ratio-submit" type="submit" disabled>确认</button><span class="submit-hint">Enter ↵</span></form>`;$('#ratio-form').addEventListener('submit',e=>{e.preventDefault();if(this.state!=='stimulus')return;const value=$('#estimate').value.trim(),n=Number(value);if(value===''||!Number.isFinite(n)||n<0||n>100){toast('输入0—100的估计值');return;}this.respond(n);});}
     }
-    overlay(title,text,buttons){this.paint(`<div class="stage-overlay"><div class="block-dots">${this.run.blocks.map((b,i)=>`<i class="${i<this.run.cursor.block?'done':''}"></i>`).join('')}</div><h2>${title}</h2><p>${text}</p><div class="actions center">${buttons}</div></div>`);this.state='overlay';}
+    overlay(title,text,buttons){this.overlayState={title,text,buttons};this.paint(`<div class="stage-overlay"><div class="block-dots">${this.run.blocks.map((b,i)=>`<i class="${i<this.run.cursor.block?'done':''}"></i>`).join('')}</div><h2>${title}</h2><p>${text}</p><div class="actions center">${buttons}</div></div>`);this.state='overlay';}
     intro(resume=false){const block=this.run.blocks[this.run.cursor.block];if(!block){this.complete();return;}this.section=block.section;
       if(!this.run.practice_done[block.section]){this.overlay(resume?'从本组继续':'先做一组练习',this.run.experiment==='search'?'按橙色 C 的缺口方向作答。':'估计 A 相当于 B 的百分数。',btn('开始练习 '+icon('arrow'),'runner-practice'));}
       else this.blockIntro();
@@ -235,14 +318,14 @@
       this.clear();if(!this.checkSize())return;
       if(this.isPractice&&this.practiceIndex>=this.practice.length){this.practiceEnd();return;}
       const block=this.run.blocks[this.run.cursor.block];if(!this.isPractice&&this.run.cursor.trial>=block.trials.length){this.run.cursor.block++;this.run.cursor.trial=0;Store.upsert(this.run);if(this.run.cursor.block>=this.run.blocks.length){this.complete();return;}this.isPractice=false;this.updateHUD();this.overlay('本组已完成','按自己的节奏休息，准备好后继续。',btn('继续下一组 '+icon('arrow'),'runner-next-block')+btn('保存并返回','runner-home','quiet'));return;}
-      const spec=this.isPractice?this.practice[this.practiceIndex]:block.trials[this.run.cursor.trial];
+      let spec=this.isPractice?this.practice[this.practiceIndex]:block.trials[this.run.cursor.trial];const variation=(this.run.block_restarts?.[this.run.cursor.block]||0)*1000+this.attempt;spec=C.replacementTrial(spec,variation);
       const index=this.isPractice?this.practiceIndex:this.run.cursor.trial,phase=this.isPractice?'practice':'formal';
       const trialId=`${this.run.id}:${phase}:${this.isPractice?this.section+'-r'+this.run.practice_rounds[this.section]:this.run.cursor.block}:${index}`;
-      this.current={...spec,phase,block_index:this.run.cursor.block,trial_index:index,trial_id:trialId,attempt_id:C.uid(),attempt_number:this.attempt};this.run.pending_trial={trial_id:trialId,block:this.run.cursor.block};Store.upsert(this.run);
+      this.current={...spec,phase,block_index:this.run.cursor.block,trial_index:index,trial_id:trialId,attempt_id:C.uid(),attempt_number:this.attempt,variation_index:variation,runtime_version:C.VERSION};this.run.pending_trial={trial_id:trialId,block:this.run.cursor.block,spec:{...this.current}};Store.upsert(this.run);
       this.updateHUD();this.renderResponse();this.state='fixation';this.trialStarted=performance.now();this.paint('<div class="fixation" aria-hidden="true">+</div>');
       this.later(500,()=>{if(this.run.experiment==='search'){this.state='cue';this.paint(`<div class="cue-arrow" aria-hidden="true">${this.current.cue_shown?(this.current.cue_side==='left'?'←':'→'):'·'}</div>`);this.later(300,()=>{this.state='blank';this.paint('');this.later(200,()=>this.stimulus());});}else this.stimulus();});
     }
-    stimulus(){const t=this.current;let html;if(this.run.experiment==='search')html=C.searchSVG(t,this.attempt);else html=`<div class="chart-stage"><div class="chart-frame"><span class="chart-caption">主图</span>${C.chartSVG(t)}</div><div class="chart-frame ${t.support==='none'?'empty':''}">${t.support==='none'?'':`<span class="chart-caption">辅助图</span>${C.chartSVG(t,t.support==='aligned')}`}</div></div>`;
+    stimulus(){const t=this.current;let html;if(this.run.experiment==='search')html=C.searchSVG(t,t.variation_index);else html=`<div class="chart-stage"><div class="chart-frame"><span class="chart-caption">主图</span>${C.chartSVG(t)}</div><div class="chart-frame ${t.support==='none'?'empty':''}">${t.support==='none'?'':`<span class="chart-caption">辅助图</span>${C.chartSVG(t,t.support==='aligned')}`}</div></div>`;
       this.state='painting';this.paint(html,onset=>{this.onset=onset;this.current.onset_ms=onset;this.state='stimulus';if(this.run.experiment==='ratio'){$('#estimate').disabled=false;$('#ratio-submit').disabled=false;$('#estimate').focus({preventScroll:true});}this.later(this.run.experiment==='search'?5000:30000,()=>this.respond(null,true));});
     }
     respond(response,timeout=false){if(this.state!=='stimulus')return;const rt=timeout?null:performance.now()-this.onset;this.clear();const t={...this.current,response,rt_ms:rt,timeout,technical_invalid:false,trial_elapsed_ms:performance.now()-this.trialStarted};
@@ -257,7 +340,7 @@
       else{this.renderResponse();this.overlay('再熟悉一组',`本组答对 ${correct} / ${this.practice.length} 次。按目标缺口方向继续练习。`,btn('继续练习','runner-practice'));}
     }
     pause(reason='已暂停'){
-      if(this.destroyed)return;const active=['fixation','cue','blank','painting','stimulus'].includes(this.state);this.clear();
+      if(this.destroyed||this.state==='paused'&&reason!=='storage')return;if(this.state==='overlay')this.pausedOverlay=this.overlayState;else if(this.state!=='paused')this.pausedOverlay=null;const active=['fixation','cue','blank','painting','stimulus'].includes(this.state);this.clear();
       if(active&&this.current){this.run.trials.push({...this.current,response:null,rt_ms:this.onset!=null&&this.state==='stimulus'?performance.now()-this.onset:null,timeout:false,technical_invalid:true,excluded_reason:reason,trial_elapsed_ms:performance.now()-this.trialStarted});this.attempt++;}
       this.current=null;this.run.pending_trial=null;Store.upsert(this.run);this.state='paused';this.renderResponse();this.paint(`<div class="stage-overlay"><div class="overlay-symbol">${icon('pause',28)}</div><h2>${reason==='storage'?'保存一份备份':'已暂停'}</h2><p>${reason==='storage'?'记录保留在当前页面，下载备份后继续。':'准备好后，从当前任务继续。'}</p><div class="actions center">${reason==='storage'?btn('下载备份','export-run','primary','data-run="'+E(this.run.id)+'"'):''}${btn('继续 '+icon('play',16),'runner-resume')}${btn('保存并返回','runner-home','secondary')}</div></div>`);
     }
@@ -268,11 +351,11 @@
       else if(action==='runner-block')this.startBlock();
       else if(action==='runner-next-block')this.intro();
       else if(action==='runner-pause')this.pause();
-      else if(action==='runner-resume'){if(this.checkSize()){if(this.practice.length&&this.isPractice)this.next();else if(this.run.practice_done[this.run.blocks[this.run.cursor.block]?.section])this.next();else this.intro();}}
+      else if(action==='runner-resume'){if(this.checkSize()){if(this.pausedOverlay){const overlay=this.pausedOverlay;this.pausedOverlay=null;this.overlay(overlay.title,overlay.text,overlay.buttons);}else if(this.practice.length&&this.isPractice)this.next();else if(this.run.practice_done[this.run.blocks[this.run.cursor.block]?.section])this.next();else this.intro();}}
       else if(action==='runner-home'){this.clear();this.pause('返回实验选择');this.destroy();App.runner=null;App.dashboard();}
       else if(action==='runner-fullscreen'){if(['fixation','cue','blank','painting','stimulus','feedback'].includes(this.state))this.pause('fullscreen');if(!document.fullscreenElement)document.documentElement.requestFullscreen?.().catch(()=>toast('可使用浏览器全屏功能'));else document.exitFullscreen?.();}
     }
-    complete(){this.clear();this.run.status='complete';this.run.completed_at=new Date().toISOString();this.run.pending_trial=null;this.run.schedule_summary=this.run.blocks.map(b=>({id:b.id,section:b.section,policy:b.policy,chart_type:b.chart_type,support:b.support,planned_trials:b.trials.length}));delete this.run.blocks;Store.upsert(this.run);App.finish(this.run);}
+    complete(){this.clear();this.run.status='complete';this.run.completed_at=new Date().toISOString();this.run.pending_trial=null;const integrity=C.inspectRun(this.run);if(!integrity.ok){this.run.status='review';this.run.integrity_issues=integrity.message;Store.upsert(this.run);this.overlay('记录已保存','请下载备份，交由研究者核对。',btn('下载JSON','export-run','primary','data-run="'+E(this.run.id)+'"')+btn('保存并返回','runner-home','secondary'));return;}this.run.schedule_summary=this.run.blocks.map(b=>({id:b.id,section:b.section,policy:b.policy,chart_type:b.chart_type,support:b.support,planned_trials:b.trials.length}));delete this.run.blocks;Store.upsert(this.run);App.finish(this.run);}
     destroy(){this.clear();this.destroyed=true;}
   }
 
