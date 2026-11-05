@@ -48,6 +48,36 @@
     all(){const m=new Map();for(const r of [...this.data.imports,...this.data.runs])m.set(r.id,r);return [...m.values()];},
     bundle(runs){return {schema:'attention-lab/export-v1',version:C.VERSION,protocol:C.PROTOCOL,exported_at:new Date().toISOString(),runs};}
   };
+  // 维护请求只处理指定编号的旧记录；原始存储有效且整次写入成功后才记录回执。
+  function applyRequestedLocalResets(){
+    const requests=window.LAB_LOCAL_MAINTENANCE?.resets||[];
+    if(!requests.length)return null;
+    try{
+      const raw=localStorage.getItem(STORAGE_KEY);if(!raw)return null;
+      const data=JSON.parse(raw),object=x=>x&&typeof x==='object'&&!Array.isArray(x);
+      if(!object(data)||data.schema!=='attention-lab/store-v1'||!Array.isArray(data.runs)||!data.runs.every(object)||!object(data.profiles)||data.imports!=null&&(!Array.isArray(data.imports)||!data.imports.every(object))||data.settings!=null&&!object(data.settings)||data.local_reset_receipts!=null&&!Array.isArray(data.local_reset_receipts))return null;
+      for(const r of [...data.runs,...data.imports||[]])if(r.upload!=null&&!object(r.upload)||r.upload_history!=null&&(!object(r.upload_history)||!Object.values(r.upload_history).every(object)))return null;
+      const receipts=(data.local_reset_receipts||[]).slice(),applied=[],clearedLogins=[];let changed=false;
+      for(const request of requests){
+        const cutoff=Date.parse(request.before);if(!Number.isFinite(cutoff)||receipts.some(r=>r?.id===request.id))continue;
+        const oldRecord=run=>run.participant===request.participant&&(!Number.isFinite(Date.parse(run.created_at))||Date.parse(run.created_at)<=cutoff);
+        const beforeRuns=data.runs.length,beforeImports=(data.imports||[]).length;
+        data.runs=data.runs.filter(r=>!oldRecord(r));if(data.imports)data.imports=data.imports.filter(r=>!oldRecord(r));
+        const retained=[...data.runs,...data.imports||[]].some(r=>r.participant===request.participant),profile=data.profiles[request.participant];
+        let profileRemoved=false;
+        if(profile&&!retained&&(!Number.isFinite(Date.parse(profile.consent_at))||Date.parse(profile.consent_at)<=cutoff)){delete data.profiles[request.participant];profileRemoved=true;}
+        const removedRuns=beforeRuns-data.runs.length,removedImports=beforeImports-(data.imports||[]).length;
+        if(!retained&&(removedRuns||removedImports||profileRemoved))clearedLogins.push(request.participant);
+        receipts.push({id:request.id,participant:request.participant,before:request.before,applied_at:new Date().toISOString(),removed_runs:removedRuns,removed_imports:removedImports});
+        changed=true;
+        if(removedRuns||removedImports||profileRemoved)applied.push(request.participant);
+      }
+      if(!changed)return null;
+      data.local_reset_receipts=receipts;localStorage.setItem(STORAGE_KEY,JSON.stringify(data));
+      try{if(clearedLogins.includes(sessionStorage.getItem(SESSION_KEY)))sessionStorage.removeItem(SESSION_KEY);}catch{}
+      return applied.length?[...new Set(applied)]:null;
+    }catch{return null;}
+  }
   function download(name,text,type='application/json;charset=utf-8'){
     const blob=new Blob([text],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
   }
@@ -368,7 +398,9 @@
   window.addEventListener('blur',()=>{if(App.runner&&['fixation','cue','blank','painting','stimulus','feedback'].includes(App.runner.state))App.runner.pause('focus');});
   window.addEventListener('resize',()=>{const r=App.runner;if(r&&!r.destroyed){const changed=r.dimensions[0]!==innerWidth||r.dimensions[1]!==innerHeight;r.dimensions=[innerWidth,innerHeight];if(changed&&['fixation','cue','blank','painting','stimulus','feedback'].includes(r.state))r.pause('resize');r.checkSize();}});
   window.addEventListener('beforeunload',()=>{if(App.runner){if(['fixation','cue','blank','painting','stimulus'].includes(App.runner.state))App.runner.pause('reload');Store.upsert(App.runner.run);}});
+  const resetParticipants=applyRequestedLocalResets();
   Store.load();try{const id=sessionStorage.getItem(SESSION_KEY);if(id&&Store.data.profiles[id]?.consent_version===CONSENT_VERSION)App.participant=id;}catch{}
   if(App.participant)App.dashboard();else App.login();
+  if(resetParticipants)toast(resetParticipants.join('、')+'旧记录已清除，可以重新开始。');
   if(QA)window.__LAB_TEST__={App,Store,get runner(){return App.runner;},C};
 })();

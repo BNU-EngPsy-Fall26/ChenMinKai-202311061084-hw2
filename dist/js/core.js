@@ -1,7 +1,7 @@
 /* 实验协议、确定性随机化、刺激绘制和被试层面分析。无网络与界面状态依赖。 */
 (function (root) {
   'use strict';
-  const VERSION = '1.1.1';
+  const VERSION = '1.1.2';
   const PROTOCOL = 'attention-v2.2-short-20261101';
   const POLICIES = ['always', 'gated'];
   const POLICY_NAMES = { none: '自主搜索', always: '持续提示', gated: '择机提示' };
