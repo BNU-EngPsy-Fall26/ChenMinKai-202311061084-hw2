@@ -240,7 +240,6 @@ to{opacity:1}
 .empty-results p{font-size:13px;margin-top:10px}
 .empty-results .empty-graphic{margin:auto;width:100px;color:#b1bec7}
 .results-note{font-size:12px;color:var(--muted);margin:20px 0}
-.qa-tag{background:#f9e7c8;color:#815b28}
 .upload-box{padding:18px;border-radius:14px;background:#f4f7f8;margin:18px 0}
 .config-row{display:flex;gap:10px;align-items:center}
 .config-row input{height:44px;flex:1;min-width:0}

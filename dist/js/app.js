@@ -2,11 +2,11 @@
 (function () {
   'use strict';
   const C=window.LabCore, $=s=>document.querySelector(s), E=C.esc;
-  const query=new URLSearchParams(location.search), QA=query.has('qa');
-  const STORAGE_KEY=QA?'attention-lab:qa-v1':'attention-lab:study-v1';
+  const STORAGE_VERSION=2, STORAGE_KEY='attention-lab:study-v'+STORAGE_VERSION;
   const SESSION_KEY=STORAGE_KEY+':login';
   const CONSENT_VERSION='20261101-v1';
-  const FAST_QA=QA&&query.get('qa')!=='normal';
+  const configuredProject=String(window.LAB_COLLECTION?.project||'').trim().toUpperCase();
+  const DEFAULT_SETTINGS={project:/^[A-Z0-9]{6}$/.test(configuredProject)?configuredProject:'',autoUpload:/^[A-Z0-9]{6}$/.test(configuredProject)&&window.LAB_COLLECTION?.autoUpload===true};
   const LAB='https://attention-lab-production.up.railway.app';
   const ICONS={
     arrow:'<path d="M5 12h14M13 6l6 6-6 6"/>',back:'<path d="M19 12H5m6-6-6 6 6 6"/>',close:'<path d="m6 6 12 12M6 18 18 6"/>',check:'<path d="m5 12 4 4 10-10"/>',pause:'<path d="M8 5v14M16 5v14"/>',play:'<path d="m9 5 10 7-10 7Z"/>',download:'<path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5"/>',clock:'<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/>',keyboard:'<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6 10h1m3 0h1m3 0h1m3 0h1M7 14h10"/>',chart:'<path d="M4 3v17h17M8 15V9m5 6V5m5 10v-4"/>',dots:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',expand:'<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',shield:'<path d="m12 3 8 3v6c0 5-8 9-8 9S4 17 4 12V6Z"/><path d="m8 12 3 3 5-6"/>',monitor:'<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',upload:'<path d="M12 16V3m-5 5 5-5 5 5M4 15v6h16v-6"/>',info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/>'
@@ -23,7 +23,7 @@
   function toast(message){$('#toast').textContent=message;$('#toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),3500);}
   const Store={
     available:true,storageWarning:false,readOnly:false,recoveryRaw:null,
-    data:{schema:'attention-lab/store-v1',profiles:{},runs:[],imports:[],settings:{project:'',autoUpload:false}},
+    data:{schema:'attention-lab/store-v1',profiles:{},runs:[],imports:[],settings:{...DEFAULT_SETTINGS}},
     load(){
       let raw;
       try{raw=localStorage.getItem(STORAGE_KEY);}catch{this.available=false;this.readOnly=true;return;}
@@ -31,7 +31,8 @@
         try{
           const d=JSON.parse(raw),object=x=>x&&typeof x==='object'&&!Array.isArray(x);
           if(d.schema!=='attention-lab/store-v1'||!Array.isArray(d.runs)||!d.runs.every(object)||!object(d.profiles)||d.imports!=null&&(!Array.isArray(d.imports)||!d.imports.every(object))||d.settings!=null&&!object(d.settings))throw Error('存储结构不完整');
-          const next={...this.data,...d,imports:d.imports||[],settings:{project:'',autoUpload:false,...d.settings}};
+          const next={...this.data,...d,imports:d.imports||[],settings:{...DEFAULT_SETTINGS,...d.settings}};
+          if(DEFAULT_SETTINGS.project&&!next.settings.project)next.settings={...next.settings,...DEFAULT_SETTINGS};
           for(const r of [...next.runs,...next.imports]){
             if(r.upload!=null&&!object(r.upload)||r.upload_history!=null&&(!object(r.upload_history)||!Object.values(r.upload_history).every(object)))throw Error('提交记录结构不完整');
             if(r.upload?.status==='sending')r.upload={...r.upload,status:'uncertain'};
@@ -48,35 +49,19 @@
     all(){const m=new Map();for(const r of [...this.data.imports,...this.data.runs])m.set(r.id,r);return [...m.values()];},
     bundle(runs){return {schema:'attention-lab/export-v1',version:C.VERSION,protocol:C.PROTOCOL,exported_at:new Date().toISOString(),runs};}
   };
-  // 维护请求只处理指定编号的旧记录；原始存储有效且整次写入成功后才记录回执。
-  function applyRequestedLocalResets(){
-    const requests=window.LAB_LOCAL_MAINTENANCE?.resets||[];
-    if(!requests.length)return null;
-    try{
-      const raw=localStorage.getItem(STORAGE_KEY);if(!raw)return null;
-      const data=JSON.parse(raw),object=x=>x&&typeof x==='object'&&!Array.isArray(x);
-      if(!object(data)||data.schema!=='attention-lab/store-v1'||!Array.isArray(data.runs)||!data.runs.every(object)||!object(data.profiles)||data.imports!=null&&(!Array.isArray(data.imports)||!data.imports.every(object))||data.settings!=null&&!object(data.settings)||data.local_reset_receipts!=null&&!Array.isArray(data.local_reset_receipts))return null;
-      for(const r of [...data.runs,...data.imports||[]])if(r.upload!=null&&!object(r.upload)||r.upload_history!=null&&(!object(r.upload_history)||!Object.values(r.upload_history).every(object)))return null;
-      const receipts=(data.local_reset_receipts||[]).slice(),applied=[],clearedLogins=[];let changed=false;
-      for(const request of requests){
-        const cutoff=Date.parse(request.before);if(!Number.isFinite(cutoff)||receipts.some(r=>r?.id===request.id))continue;
-        const oldRecord=run=>run.participant===request.participant&&(!Number.isFinite(Date.parse(run.created_at))||Date.parse(run.created_at)<=cutoff);
-        const beforeRuns=data.runs.length,beforeImports=(data.imports||[]).length;
-        data.runs=data.runs.filter(r=>!oldRecord(r));if(data.imports)data.imports=data.imports.filter(r=>!oldRecord(r));
-        const retained=[...data.runs,...data.imports||[]].some(r=>r.participant===request.participant),profile=data.profiles[request.participant];
-        let profileRemoved=false;
-        if(profile&&!retained&&(!Number.isFinite(Date.parse(profile.consent_at))||Date.parse(profile.consent_at)<=cutoff)){delete data.profiles[request.participant];profileRemoved=true;}
-        const removedRuns=beforeRuns-data.runs.length,removedImports=beforeImports-(data.imports||[]).length;
-        if(!retained&&(removedRuns||removedImports||profileRemoved))clearedLogins.push(request.participant);
-        receipts.push({id:request.id,participant:request.participant,before:request.before,applied_at:new Date().toISOString(),removed_runs:removedRuns,removed_imports:removedImports});
-        changed=true;
-        if(removedRuns||removedImports||profileRemoved)applied.push(request.participant);
-      }
-      if(!changed)return null;
-      data.local_reset_receipts=receipts;localStorage.setItem(STORAGE_KEY,JSON.stringify(data));
-      try{if(clearedLogins.includes(sessionStorage.getItem(SESSION_KEY)))sessionStorage.removeItem(SESSION_KEY);}catch{}
-      return applied.length?[...new Set(applied)]:null;
-    }catch{return null;}
+  // 正式收数使用当前存储版本，清理此前版本的试运行记录，保留之后的新作答。
+  function clearStudyStorage(includeCurrent=false){
+    for(const storage of [localStorage,sessionStorage]){
+      const keys=[];for(let i=0;i<storage.length;i++)keys.push(storage.key(i));
+      for(const key of keys){const match=/^attention-lab:(?:study|qa)-v(\d+)(?::login|:probe)?$/.exec(key||'');if(match&&(Number(match[1])<STORAGE_VERSION||includeCurrent&&Number(match[1])===STORAGE_VERSION))storage.removeItem(key);}
+    }
+  }
+  function clearLocalRecords(confirmed=false){
+    if(!App.researcher)return;
+    if(!confirmed){openModal('清空本机记录','<p>清除当前浏览器中的全部作答、导入记录和参与编号。课程项目设置保留，后续参与重新记录。</p>',btn('返回','close-modal','secondary')+btn('确认清空','confirm-clear-local','primary'));return;}
+    const settings={...Store.data.settings},fresh={schema:'attention-lab/store-v1',profiles:{},runs:[],imports:[],settings};
+    try{clearStudyStorage(true);localStorage.setItem(STORAGE_KEY,JSON.stringify(fresh));}catch{toast('清理尚待完成，请重试。');return;}
+    App.runner?.destroy();App.runner=null;Store.data=fresh;Store.available=true;Store.readOnly=false;Store.recoveryRaw=null;Store.storageWarning=false;App.participant=null;App.researcher=false;App.pending=null;closeModal();App.login();toast('本机作答记录已清空。');
   }
   function download(name,text,type='application/json;charset=utf-8'){
     const blob=new Blob([text],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
@@ -96,7 +81,10 @@
     const headers=rows.shift()||[],required=['run_id','participant','experiment','mode','protocol','phase','trial_id'];if(required.some(k=>!headers.includes(k)))throw Error('请选择本实验导出的CSV或JSON。');
     const runs=new Map(),numbers=new Set(['block_index','trial_index','set_size','true_ratio','estimate','absolute_error','signed_error','log_absolute_error','rt_ms','seed','rotation','onset_ms','trial_elapsed_ms','attempt_number','variation_index','stimulus_seed']);
     const booleans=new Set(['potential_valid','cue_shown','correct','timeout','technical_invalid','withdrawn']);
-    for(const cells of rows){const rec={};headers.forEach((k,i)=>{let v=cells[i]??'';if(v!==''&&numbers.has(k))v=Number(v);if(booleans.has(k)&&v!==''){v=v.trim().toLowerCase();if(!['true','false','1','0'].includes(v))throw Error('请检查布尔字段');v=v==='true'||v==='1';}if(['values','labels'].includes(k)&&v){try{v=JSON.parse(v);}catch{v=[];}}rec[k]=v;});
+    for(const cells of rows){const rec={};headers.forEach((k,i)=>{let v=cells[i]??'';if(v!==''&&numbers.has(k))v=Number(v);if(booleans.has(k)&&v!==''){v=v.trim().toLowerCase();if(!['true','false','1','0'].includes(v))throw Error('请检查布尔字段');v=v==='true'||v==='1';}if(['values','labels'].includes(k)&&v){try{v=JSON.parse(v);}catch{v=k==='labels'?v.split(','):[];}}rec[k]=v;});
+      for(const k of ['created_at','experiment','trial_index'])if(rec['trial.'+k]!=null&&rec['trial.'+k]!=='')rec[k]=k==='trial_index'?Number(rec['trial.'+k]):rec['trial.'+k];
+      if(rec.experiment==='visual_search')rec.experiment='search';if(rec.experiment==='graphical_ratio')rec.experiment='ratio';
+      if(rec.timeout===true&&rec.rt_ms===-1)rec.rt_ms='';
       if(!runs.has(rec.run_id))runs.set(rec.run_id,{id:rec.run_id,participant:rec.participant,experiment:rec.experiment,mode:rec.mode,protocol:rec.protocol,status:rec.status,created_at:rec.created_at,completed_at:rec.completed_at,consent_version:rec.consent_version,consent_at:rec.consent_at,withdrawn:!!rec.withdrawn,withdrawn_at:rec.withdrawn_at,experiment_order:rec.experiment_order,mapping:rec.key_mapping?JSON.parse(rec.key_mapping):undefined,trials:[]});
       const t={};for(const k of CSV_FIELDS)if(!['run_id','participant','experiment','mode','protocol','status','created_at','completed_at','consent_version','consent_at','withdrawn','withdrawn_at','experiment_order','key_mapping'].includes(k)&&rec[k]!=='')t[k]=rec[k];runs.get(rec.run_id).trials.push(t);
     }return [...runs.values()];
@@ -152,9 +140,9 @@
   Store.save();closeModal();App.records();toast('本地记录已撤回并保留存档');
 }
   const App={
-    participant:null,runner:null,view:'login',pending:null,researcher:query.get('view')==='researcher',
+    participant:null,runner:null,view:'login',pending:null,researcher:false,
     canViewResults(){return this.researcher||['search','ratio'].every(e=>Store.data.runs.some(r=>r.participant===this.participant&&r.experiment===e&&r.mode==='formal'&&!r.withdrawn&&r.protocol===C.PROTOCOL&&isComplete(r)));},
-    header(){return `<header class="app-header">${brand()}<div class="header-right">${QA?'<span class="pill qa-tag">调试体验</span>':''}${this.canViewResults()?'<button class="btn btn-quiet btn-small" data-action="results">'+icon('chart',16)+'数据与结果</button>':''}<span class="header-divider"></span><span class="profile-pill"><span class="avatar">ID</span><span class="mono">${E(this.participant||'研究者')}</span></span><button class="icon-btn" data-action="menu" aria-label="更多选项">${icon('dots')}</button></div></header>`;},
+    header(){return `<header class="app-header">${brand()}<div class="header-right">${this.canViewResults()?'<button class="btn btn-quiet btn-small" data-action="results">'+icon('chart',16)+'数据与结果</button>':''}<span class="header-divider"></span><span class="profile-pill"><span class="avatar">ID</span><span class="mono">${E(this.participant||'研究者')}</span></span><button class="icon-btn" data-action="menu" aria-label="更多选项">${icon('dots')}</button></div></header>`;},
     login(){this.view='login';$('#app').innerHTML=`<main id="main" class="login-shell"><section class="login-visual">${brand()}<div class="login-art">${loginArt()}</div><div class="login-note"><span>ATTENTION LAB</span><span>01 / 02</span></div></section><section class="login-content"><form class="login-form" id="login-form"><div class="login-mobile-brand">${brand()}</div><h1>从这里开始</h1><p class="muted">使用参与编号进入实验。</p><label class="field"><span class="field-label">参与编号</span><input class="text-input participant-input mono" id="participant" name="participant" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="12" placeholder="P01" required aria-describedby="id-hint"><span class="field-hint" id="id-hint">填写研究者提供的匿名编号</span></label><label class="check-line"><input id="consent" type="checkbox" required><span>我已阅读<button type="button" class="link-button" data-action="consent">参与说明</button>，并自愿参加。</span></label><button class="btn btn-primary" type="submit">进入实验 ${icon('arrow')}</button><div class="login-footer">${icon('shield',14)} <span>匿名参与 · 自动保存</span></div></form></section></main>`;
       $('#login-form').addEventListener('submit',e=>{e.preventDefault();const id=$('#participant').value.trim().toUpperCase();if(!/^[A-Z][A-Z0-9_-]{1,11}$/.test(id)){$('#id-hint').textContent='使用2—12位编号，以英文字母开头';$('#participant').focus();return;}if(!$('#consent').checked){$('#consent').focus();return;}this.participant=id;this.researcher=false;Store.data.profiles[id]={...Store.data.profiles[id],id,consent_version:CONSENT_VERSION,consent_at:new Date().toISOString()};Store.save();try{sessionStorage.setItem(SESSION_KEY,id);}catch{}this.dashboard();});
       $('#participant').focus({preventScroll:true});
@@ -168,13 +156,13 @@
     },
     choose(experiment,mode='formal'){
       if(!this.participant){this.login();return;}
-      if(mode==='formal'&&!QA){const r=Store.data.runs.filter(r=>r.participant===this.participant&&r.experiment===experiment&&r.mode==='formal'&&!r.withdrawn&&r.protocol===C.PROTOCOL).slice(-1)[0];if(isComplete(r)){this.finish(r);return;}if(r){this.launch(r,true);return;}}
-      this.pending={experiment,mode:QA?'test':mode};this.view='instructions';const index=C.assignment(this.participant),mapping=index%2?{f:'right',j:'left'}:{f:'left',j:'right'};
+      if(mode==='formal'){const r=Store.data.runs.filter(r=>r.participant===this.participant&&r.experiment===experiment&&r.mode==='formal'&&!r.withdrawn&&r.protocol===C.PROTOCOL).slice(-1)[0];if(isComplete(r)){this.finish(r);return;}if(r){this.launch(r,true);return;}}
+      this.pending={experiment,mode};this.view='instructions';const index=C.assignment(this.participant),mapping=index%2?{f:'right',j:'left'}:{f:'left',j:'right'};
       const directions=['left','right'].map(d=>{const key=Object.keys(mapping).find(k=>mapping[k]===d).toUpperCase();return `<div class="key-example"><svg viewBox="0 0 56 56" aria-hidden="true">${C.glyph(28,28,'C',d,C.COLOR.orange,18,5)}</svg><div><span class="keycap">${key}</span><small class="muted">缺口向${d==='left'?'左':'右'}</small></div></div>`;}).join('');
       const demo=experiment==='search'?directions:`<div class="fraction-demo"><div class="mini-bars"><i data-label="A" style="height:38px;background:var(--orange)"></i><i data-label="B" style="height:76px;background:var(--blue)"></i></div><div class="ratio-equation mono">20 ÷ 40 = 50%<small>A是B的一半</small></div></div>`;
-      $('#app').innerHTML=`${this.header()}<main id="main" class="instruction-page"><button class="btn btn-quiet btn-small back-btn" data-action="home">${icon('back',16)}实验选择</button><section class="instruction-panel"><div class="instruction-top"><span class="eyebrow">${experiment==='search'?'VISUAL SEARCH':'PROPORTION JUDGMENT'}</span><span class="pill ${mode!=='formal'||QA?'pill-warm':''}">${mode!=='formal'||QA?'体验':'正式参与'}</span></div><h1>${experiment==='search'?'寻找橙色 C':'估计 A 与 B 的比例'}</h1><p class="lead">${experiment==='search'?'按目标缺口的方向作答。':'输入 A 相当于 B 的百分数。'}</p><div class="instruction-demo">${demo}</div><div class="instruction-lines">${experiment==='search'?`<div class="instruction-line"><span class="num">1</span><span>每幅画面都有一个橙色 C。</span></div><div class="instruction-line"><span class="num">2</span><span>位置箭头提供参考，答案以目标缺口为准。</span></div>`:`<div class="instruction-line"><span class="num">1</span><span>B是参照量，答案范围为0—100。</span></div><div class="instruction-line"><span class="num">2</span><span>根据图形作视觉估计，按 Enter 提交。</span></div>`}</div><div class="instruction-bottom"><span class="muted">先完成练习，再进入${mode!=='formal'||QA?'体验':'正式'}任务。</span>${btn('开始练习 '+icon('arrow'),'begin')}</div></section></main>`;window.scrollTo(0,0);
+      $('#app').innerHTML=`${this.header()}<main id="main" class="instruction-page"><button class="btn btn-quiet btn-small back-btn" data-action="home">${icon('back',16)}实验选择</button><section class="instruction-panel"><div class="instruction-top"><span class="eyebrow">${experiment==='search'?'VISUAL SEARCH':'PROPORTION JUDGMENT'}</span><span class="pill ${mode!=='formal'?'pill-warm':''}">${mode!=='formal'?'体验':'正式参与'}</span></div><h1>${experiment==='search'?'寻找橙色 C':'估计 A 与 B 的比例'}</h1><p class="lead">${experiment==='search'?'按目标缺口的方向作答。':'输入 A 相当于 B 的百分数。'}</p><div class="instruction-demo">${demo}</div><div class="instruction-lines">${experiment==='search'?`<div class="instruction-line"><span class="num">1</span><span>每幅画面都有一个橙色 C。</span></div><div class="instruction-line"><span class="num">2</span><span>位置箭头提供参考，答案以目标缺口为准。</span></div>`:`<div class="instruction-line"><span class="num">1</span><span>B是参照量，答案范围为0—100。</span></div><div class="instruction-line"><span class="num">2</span><span>根据图形作视觉估计，按 Enter 提交。</span></div>`}</div><div class="instruction-bottom"><span class="muted">先完成练习，再进入${mode!=='formal'?'体验':'正式'}任务。</span>${btn('开始练习 '+icon('arrow'),'begin')}</div></section></main>`;window.scrollTo(0,0);
     },
-    begin(){if(!this.pending)return;const {experiment,mode}=this.pending;let run;if(QA&&query.get('qa')==='full'){run=C.makeRun(experiment,this.participant,'formal');run.mode='test';}else run=C.makeRun(experiment,this.participant,mode);
+    begin(){if(!this.pending)return;const {experiment,mode}=this.pending,run=C.makeRun(experiment,this.participant,mode);
       const own=Store.data.runs.filter(r=>r.participant===this.participant&&r.mode===mode&&r.protocol===C.PROTOCOL);run.experiment_order=[...new Set([...own.map(r=>r.experiment),experiment])].join('→');run.consent_version=CONSENT_VERSION;run.consent_at=Store.data.profiles[this.participant]?.consent_at;run.environment={width:innerWidth,height:innerHeight,ua:navigator.userAgent.slice(0,80),devicePixelRatio};Store.upsert(run);this.pending=null;this.launch(run,false);
     },
     launch(run,resume){
@@ -188,7 +176,7 @@
       $('#app').innerHTML=`${this.header()}<main id="main"><section class="finish-panel"><div class="finish-check">${icon('check',34)}</div><h1>${titleOf(run.experiment)}${run.mode==='formal'?'已完成':'体验已完成'}</h1><p>${run.mode==='formal'?'感谢你的参与。':'体验记录已单独标记。'}</p><div class="finish-stats"><div class="finish-stat"><strong>${rows.length}</strong><small>${run.mode==='formal'?'正式试次':'体验试次'}</small></div><div class="finish-stat"><strong>${run.experiment==='search'?fmt(accuracy*100)+'%':fmt(C.mean(valid.map(t=>t.absolute_error)),1)}</strong><small>${run.experiment==='search'?'正确率':'平均误差 · 百分点'}</small></div></div><div class="save-state">${icon('check',15)}<span id="finish-save-label">${Store.available?'已保存到当前浏览器':'当前页面保留着记录，请下载备份'}</span></div><div class="actions center">${remaining?`<button class="btn btn-primary" data-action="choose" data-experiment="${remaining}">继续${titleOf(remaining)} ${icon('arrow',17)}</button>`:btn('返回实验选择','home')}${btn('保存 JSON','export-run','secondary',`data-run="${E(run.id)}"`)}</div><div class="download-row"><button class="link-button" data-action="export-run-csv" data-run="${E(run.id)}">下载CSV</button><button class="link-button" data-action="home">实验选择</button></div></section></main>`;
       if(Store.data.settings.autoUpload&&Store.data.settings.project&&run.mode==='formal'&&uploadState(run).status!=='confirmed')submitRun(run).then(()=>{const label=$('#finish-save-label');if(label)label.textContent=uploadState(run).status==='confirmed'?'已保存，并提交至课程平台':'已保存到当前浏览器';});window.scrollTo(0,0);
     },
-    menu(){openModal('选项',`<div class="record-list"><button class="btn btn-secondary" data-action="consent">参与说明</button><button class="btn btn-secondary" data-action="records">我的记录</button>${this.researcher?'<button class="btn btn-secondary" data-action="results">数据与结果</button><button class="btn btn-secondary" data-action="design">研究说明</button><button class="btn btn-secondary" data-action="settings">课程项目</button><button class="btn btn-secondary" data-action="participant-view">参与者视图</button>':'<button class="btn btn-secondary" data-action="researcher">研究者视图</button>'}<button class="btn btn-quiet" data-action="logout">退出登录</button></div>`);},
+    menu(){openModal('选项',`<div class="record-list"><button class="btn btn-secondary" data-action="consent">参与说明</button><button class="btn btn-secondary" data-action="records">我的记录</button>${this.researcher?'<button class="btn btn-secondary" data-action="results">数据与结果</button><button class="btn btn-secondary" data-action="design">研究说明</button><button class="btn btn-secondary" data-action="settings">课程项目</button><button class="btn btn-secondary" data-action="clear-local">清空本机记录</button><button class="btn btn-secondary" data-action="participant-view">参与者视图</button>':'<button class="btn btn-secondary" data-action="researcher">研究者视图</button>'}<button class="btn btn-quiet" data-action="logout">退出登录</button></div>`);},
     records(){
   const runs=Store.data.runs.filter(r=>r.participant===this.participant);
   const content=runs.length?`<div class="record-list">${runs.map(r=>`<div class="record-item"><div><strong>${titleOf(r.experiment)} · ${r.mode==='formal'?'正式':r.mode==='test'?'调试体验':'体验'}</strong><small>${dateOf(r.created_at)} · ${r.withdrawn?'本地已撤回':r.status==='complete'?'已完成':r.status==='review'?'待核对':'已保存进度'}${r.protocol!==C.PROTOCOL?' · 早期版本':''}</small></div><div class="actions"><button class="btn btn-secondary btn-small" data-action="export-run" data-run="${E(r.id)}">下载JSON</button>${r.withdrawn?'':`<button class="btn btn-quiet btn-small" data-action="withdraw" data-run="${E(r.id)}">撤回</button>`}</div></div>`).join('')}</div>`:'<p>完成一组任务后，记录会显示在这里。</p>';
@@ -217,6 +205,8 @@
       else if(action==='menu')this.menu();
       else if(action==='records')this.records();
       else if(action==='settings')this.settings();
+      else if(action==='clear-local')clearLocalRecords();
+      else if(action==='confirm-clear-local')clearLocalRecords(true);
       else if(action==='design')this.design();
       else if(action==='results')this.results();
       else if(action==='logout'){closeModal();if(this.runner){this.runner.pause('退出');this.runner.destroy();this.runner=null;}this.participant=null;this.researcher=false;try{sessionStorage.removeItem(SESSION_KEY);}catch{}this.login();}
@@ -290,7 +280,7 @@
   function saveUpload(run,project,state){const value={project,...state};run.upload_history=run.upload_history||{};run.upload_history[project]=value;run.upload=value;Store.save();}
   async function submitRun(run,retry=false){
   const project=Store.data.settings.project;if(!project){App.settings();return;}
-  if(QA||run.mode!=='formal'||run.status!=='complete'||run.withdrawn||run.protocol!==C.PROTOCOL){toast('课程平台接收已完成的正式记录');return;}
+  if(run.mode!=='formal'||run.status!=='complete'||run.withdrawn||run.protocol!==C.PROTOCOL){toast('课程平台接收已完成的正式记录');return;}
   const integrity=C.inspectRun(run);if(!integrity.ok){toast('记录待核对：'+integrity.message);return;}
   const current=uploadState(run,project);
   if(current.status==='confirmed'){toast('这份记录已提交至当前项目');return;}if(current.status==='sending')return;
@@ -301,7 +291,7 @@
   try{
     const res=await fetch(LAB+'/api/hw2/submit',{method:'POST',headers:{'Content-Type':'application/json'},body,signal:abort.signal});
     let data;try{data=await res.json();}catch{throw Error('回执待核对');}
-    if(res.ok&&data.ok===true){saveUpload(run,project,{status:'confirmed',time:new Date().toISOString()});toast('课程平台已确认接收');}
+    if(res.ok&&data.ok===true){saveUpload(run,project,{status:'confirmed',time:new Date().toISOString(),warnings:Array.isArray(data.warnings)?data.warnings:[],warning_details:Array.isArray(data.warning_details)?data.warning_details:[]});toast(data.warnings?.length?'平台已接收，请核对字段提示。':'课程平台已确认接收');}
     else if(data.ok===false){saveUpload(run,project,{status:'error',message:String(data.msg||'请核对项目码与数据字段').slice(0,200)});toast(uploadState(run,project).message);}
     else throw Error('回执待核对');
   }catch{saveUpload(run,project,{status:'uncertain',time:new Date().toISOString()});toast('记录已保存在本地，平台接收情况待核对。');}
@@ -310,7 +300,7 @@
   function uploadList(){
   const runs=Store.all().filter(r=>r.mode==='formal'&&r.protocol===C.PROTOCOL&&r.status==='complete'&&!r.withdrawn);
   const stateLabel={local:'本地已保存',sending:'提交中',confirmed:'平台已确认',uncertain:'平台接收待核对',error:'请核对项目配置'};
-  const content=runs.length?runs.map(r=>{const current=uploadState(r);return `<div class="record-item"><div><strong>${E(r.participant)} · ${titleOf(r.experiment)}</strong><small>${stateLabel[current.status]||'待核对'}</small></div>${current.status==='confirmed'?'<span class="pill pill-green">已提交</span>':`<button class="btn btn-secondary btn-small" data-action="${current.status==='uncertain'?'retry-upload':'upload-run'}" data-run="${E(r.id)}" ${current.status==='sending'?'disabled':''}>${current.status==='uncertain'?'已核对，重试':current.status==='sending'?'提交中':'提交'}</button>`}</div>`;}).join(''):'<p>完整正式记录会显示在这里。</p>';
+  const content=runs.length?runs.map(r=>{const current=uploadState(r);return `<div class="record-item"><div><strong>${E(r.participant)} · ${titleOf(r.experiment)}</strong><small>${current.warnings?.length?'平台已接收 · 字段需核对':stateLabel[current.status]||'待核对'}</small></div>${current.status==='confirmed'?(current.warnings?.length?'<span class="pill pill-warm">核对字段</span>':'<span class="pill pill-green">已提交</span>'):`<button class="btn btn-secondary btn-small" data-action="${current.status==='uncertain'?'retry-upload':'upload-run'}" data-run="${E(r.id)}" ${current.status==='sending'?'disabled':''}>${current.status==='uncertain'?'已核对，重试':current.status==='sending'?'提交中':'提交'}</button>`}</div>`;}).join(''):'<p>完整正式记录会显示在这里。</p>';
   openModal('提交记录',`<p>${Store.data.settings.project?'课程项目 '+E(Store.data.settings.project):'先在课程项目中填写6位项目码。'}</p><div class="record-list">${content}</div>`,btn('课程项目','settings','secondary')+btn('完成','close-modal'));
 }
 
@@ -322,9 +312,9 @@
       this.run.runtime_versions=[...new Set([...(this.run.runtime_versions||[this.run.version]),C.VERSION])];this.updateHUD();this.renderResponse();this.intro(resume);this.checkSize();
     }
     clear(){this.token++;clearTimeout(this.timer);if(this.frame)cancelAnimationFrame(this.frame);this.timer=null;this.frame=null;}
-    later(ms,fn){const token=this.token;this.timer=setTimeout(()=>{if(!this.destroyed&&token===this.token)fn();},FAST_QA?(ms>=5000?900:Math.max(5,ms*.012)):ms);}
+    later(ms,fn){const token=this.token;this.timer=setTimeout(()=>{if(!this.destroyed&&token===this.token)fn();},ms);}
     paint(html,fn){const token=this.token;$('#trial-stage').innerHTML=html;if(fn)this.frame=requestAnimationFrame(()=>{if(!this.destroyed&&token===this.token)fn(performance.now());});}
-    updateHUD(){const done=this.run.blocks.slice(0,this.run.cursor.block).reduce((n,b)=>n+b.trials.length,0)+this.run.cursor.trial,total=this.run.blocks.reduce((n,b)=>n+b.trials.length,0);$('#trial-counter').textContent=this.isPractice?`${this.practiceIndex+1} / ${this.practice.length}`:`${done} / ${total}`;$('#phase-label').textContent=this.isPractice?'练习':this.run.mode==='formal'?'正式':QA?'调试体验':'体验';$('#trial-progress-fill').style.width=`${done/total*100}%`;$('.trial-progress').setAttribute('aria-valuenow',String(Math.round(done/total*100)));$('#stage-label').textContent=this.run.experiment==='search'?'寻找橙色 C':'A / B';$('#block-label').textContent=`第 ${Math.min(this.run.cursor.block+1,this.run.blocks.length)} / ${this.run.blocks.length} 组`;}
+    updateHUD(){const done=this.run.blocks.slice(0,this.run.cursor.block).reduce((n,b)=>n+b.trials.length,0)+this.run.cursor.trial,total=this.run.blocks.reduce((n,b)=>n+b.trials.length,0);$('#trial-counter').textContent=this.isPractice?`${this.practiceIndex+1} / ${this.practice.length}`:`${done} / ${total}`;$('#phase-label').textContent=this.isPractice?'练习':this.run.mode==='formal'?'正式':'体验';$('#trial-progress-fill').style.width=`${done/total*100}%`;$('.trial-progress').setAttribute('aria-valuenow',String(Math.round(done/total*100)));$('#stage-label').textContent=this.run.experiment==='search'?'寻找橙色 C':'A / B';$('#block-label').textContent=`第 ${Math.min(this.run.cursor.block+1,this.run.blocks.length)} / ${this.run.blocks.length} 组`;}
     renderResponse(feedback=''){
       if(feedback){$('#response-bar').innerHTML=`<div class="practice-feedback ${this.lastCorrect===false?'hint':''}" role="status">${feedback}</div>`;return;}
       if(this.run.experiment==='search'){$('#response-bar').innerHTML=['left','right'].map(d=>{const key=Object.keys(this.run.mapping).find(k=>this.run.mapping[k]===d).toUpperCase();return `<div class="response-key"><span class="keycap">${key}</span><span>缺口向${d==='left'?'左':'右'}</span></div>`;}).join('');}
@@ -398,9 +388,8 @@
   window.addEventListener('blur',()=>{if(App.runner&&['fixation','cue','blank','painting','stimulus','feedback'].includes(App.runner.state))App.runner.pause('focus');});
   window.addEventListener('resize',()=>{const r=App.runner;if(r&&!r.destroyed){const changed=r.dimensions[0]!==innerWidth||r.dimensions[1]!==innerHeight;r.dimensions=[innerWidth,innerHeight];if(changed&&['fixation','cue','blank','painting','stimulus','feedback'].includes(r.state))r.pause('resize');r.checkSize();}});
   window.addEventListener('beforeunload',()=>{if(App.runner){if(['fixation','cue','blank','painting','stimulus'].includes(App.runner.state))App.runner.pause('reload');Store.upsert(App.runner.run);}});
-  const resetParticipants=applyRequestedLocalResets();
+  let legacyCleared=true;try{clearStudyStorage();}catch{legacyCleared=false;}
   Store.load();try{const id=sessionStorage.getItem(SESSION_KEY);if(id&&Store.data.profiles[id]?.consent_version===CONSENT_VERSION)App.participant=id;}catch{}
   if(App.participant)App.dashboard();else App.login();
-  if(resetParticipants)toast(resetParticipants.join('、')+'旧记录已清除，可以重新开始。');
-  if(QA)window.__LAB_TEST__={App,Store,get runner(){return App.runner;},C};
+  if(!legacyCleared)toast('旧记录清理尚待完成，请重新打开页面。');
 })();

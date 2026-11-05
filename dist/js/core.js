@@ -1,7 +1,7 @@
 /* 实验协议、确定性随机化、刺激绘制和被试层面分析。无网络与界面状态依赖。 */
 (function (root) {
   'use strict';
-  const VERSION = '1.1.2';
+  const VERSION = '1.2.0';
   const PROTOCOL = 'attention-v2.2-short-20261101';
   const POLICIES = ['always', 'gated'];
   const POLICY_NAMES = { none: '自主搜索', always: '持续提示', gated: '择机提示' };
@@ -181,7 +181,6 @@
   const mean=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:null;
   const median=a=>{if(!a.length)return null;const s=a.slice().sort((a,b)=>a-b),i=Math.floor(s.length/2);return s.length%2?s[i]:(s[i-1]+s[i])/2;};
   const round=(n,d=2)=>n==null?null:Number(n.toFixed(d));
-  function slope(points){const x=mean(points.map(d=>d[0])), y=mean(points.map(d=>d[1]));return points.reduce((s,d)=>s+(d[0]-x)*(d[1]-y),0)/points.reduce((s,d)=>s+(d[0]-x)**2,0);}
   function paired(values) {
     const a=values.filter(Number.isFinite),n=a.length, estimate=mean(a); if(!n)return {n:0,mean:null,ci:null,p:null,values:[]};
     let ci=null,p=null;
@@ -252,11 +251,11 @@
   function payload(run, project) {
     const check=inspectRun(run);if(!check.ok||run.status!=='complete'||run.withdrawn)throw Error(check.message||'请选择完整有效记录');
     return {project,experiment:run.experiment==='search'?'visual_search':'graphical_ratio',participant:run.participant,condition:'',trials:analysisRows(run).map(t=>{
-      const row={cond:t.section==='classic'?`${t.search_type}_${t.set_size}`:t.section==='aid'?`${t.policy}_${t.reliability}`:`${t.chart_type}_${t.support}`,trial_id:t.trial_id,run_id:run.id,protocol:PROTOCOL,seed:t.seed,rt:t.rt_ms??-1,timeout:!!t.timeout,block:t.block_index,mode:run.mode};
+      const row={cond:t.section==='classic'?`${t.search_type}_${t.set_size}`:t.section==='aid'?`${t.policy}_${t.reliability}`:`${t.chart_type}_${t.support}`,trial_id:t.trial_id,run_id:run.id,protocol:PROTOCOL,seed:t.seed,rt:t.rt_ms??-1,rt_ms:t.rt_ms??-1,timeout:!!t.timeout,block:t.block_index,block_index:t.block_index,trial_index:t.trial_index,mode:run.mode,phase:'formal',status:'complete',experiment:run.experiment,created_at:run.created_at,completed_at:run.completed_at,consent_version:run.consent_version||'',consent_at:run.consent_at||'',key_mapping:JSON.stringify(run.mapping),experiment_order:run.experiment_order||''};
       for(const k of ['attempt_id','attempt_number','variation_index','stimulus_seed','runtime_version','section','set_size','search_type','policy','reliability','potential_valid','cue_shown','cue_side','target_side','gap','response','correct','estimate','true_ratio','absolute_error','signed_error','log_absolute_error','chart_type','support','values','rotation','trial_elapsed_ms'])if(t[k]!=null)row[k]=t[k];
       if(t.labels)row.labels=t.labels.join(",");
       return row;
     }),meta:{version:VERSION,protocol:PROTOCOL,run_id:run.id,consent_version:run.consent_version||'',consent_at:run.consent_at||'',prereg_commit:run.preregistration?.preregistration_commit||'',predictions_sha256_lf:run.preregistration?.predictions_sha256_lf||'',key_mapping:JSON.stringify(run.mapping),experiment_order:run.experiment_order||'',width:run.environment?.width||0,height:run.environment?.height||0,ua:run.environment?.ua||''}};
   }
-  root.LabCore={VERSION,PROTOCOL,POLICIES,POLICY_NAMES,SUPPORT_NAMES,COLOR,RATIOS,hash,random,shuffle,assignment,uid,esc,makeRun,practiceTrials,replacementTrial,normalizeTrial,analysisRows,inspectRun,searchItems,glyph,searchSVG,chartSVG,mean,median,round,slope,paired,formalRows,subjectSummary,analyze,payload};
+  root.LabCore={VERSION,PROTOCOL,POLICIES,POLICY_NAMES,SUPPORT_NAMES,COLOR,RATIOS,hash,random,shuffle,assignment,uid,esc,makeRun,practiceTrials,replacementTrial,normalizeTrial,analysisRows,inspectRun,searchItems,glyph,searchSVG,chartSVG,mean,median,round,paired,formalRows,subjectSummary,analyze,payload};
 })(typeof window!=='undefined'?window:globalThis);
