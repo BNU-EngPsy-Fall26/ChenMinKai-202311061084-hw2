@@ -351,3 +351,28 @@ to{opacity:1}
 .experiment-card:hover{transform:none}
 }
 
+
+/* 两条件任务。 */
+.login-form h1{margin-bottom:32px}
+.field-hint:empty{display:none}
+.login-visual{justify-content:center;gap:24px}
+.login-visual>.brand{position:absolute;top:52px;left:7vw}
+.instruction-demo{border:0;background:#f8faf9;border-radius:16px}
+.ratio-guide-chart{height:220px;width:100%;display:flex;justify-content:center}
+.ratio-guide-chart svg{height:100%;width:auto}
+.single-chart-stage{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:6px 28px}
+.single-chart-stage .divided-chart{width:100%;height:100%;max-width:700px}
+.trial-stage{background:#fff}
+.segment-choice{display:flex;border:0;padding:0;margin:0;gap:8px}
+.segment-choice label{position:relative;cursor:pointer}
+.segment-choice input{position:absolute;opacity:0;width:1px;height:1px}
+.segment-choice span{display:flex;align-items:center;justify-content:center;height:43px;min-width:61px;padding:0 13px;border:1px solid #cbd5db;border-radius:10px;background:white;transition:background .15s,border-color .15s}
+.segment-choice input:checked+span{background:#edf3f7;border-color:#28649f;color:#28649f;box-shadow:inset 0 0 0 1px #28649f}
+.segment-choice input:focus-visible+span{outline:3px solid #5285af;outline-offset:3px}
+.segment-choice:disabled label{cursor:default;opacity:.55}
+.ratio-response{flex-wrap:wrap;justify-content:center;gap:12px}
+.ratio-response .ratio-question{margin:0 0 0 10px}
+.finish-stats{gap:0}
+.finish-stat{padding:0 24px}
+@media(max-height:760px) and (min-width:1000px){.single-chart-stage{padding:4px 20px}.response-bar:has(.ratio-response){height:75px;min-height:75px}}
+@media(max-width:760px){.finish-stat{padding:0 12px}.finish-stat strong{font-size:22px}.response-bar:has(.ratio-response){height:110px;min-height:110px}.ratio-response .ratio-question{margin-left:0}}
