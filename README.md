@@ -1,6 +1,6 @@
 # 注意实验室
 
-项目码：**XYVTBN**。软件2.1.1，协议`attention-v4-two-condition-20261107`。
+项目码：**XYVTBN**。软件2.1.2，协议`attention-v4-two-condition-20261107`。
 
 ## 运行
 

@@ -1,7 +1,7 @@
 /* 确定性刺激、记录校验与被试内分析。 */
 (function (root) {
   'use strict';
-  const VERSION='2.1.1', PROTOCOL='attention-v4-two-condition-20261107', ANALYSIS_POLICY='all-available-v1';
+  const VERSION='2.1.2', PROTOCOL='attention-v4-two-condition-20261107', ANALYSIS_POLICY='all-available-v1';
   const EXPERIMENT_IDS={search:'visual_search_ratio_v4',ratio:'graphical_ratio_spacing_v4'};
   const CONDITIONS={search:['baseline','improved'],ratio:['adjacent','separated']};
   const CONDITION_NAMES={baseline:'等量干扰',improved:'偏置比例',adjacent:'相邻',separated:'间隔一段'};

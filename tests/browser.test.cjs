@@ -63,7 +63,7 @@ async function researcher(page){await page.locator('[data-action=menu]').click()
   await page.addInitScript(({key})=>{
    if(!localStorage.getItem(key))localStorage.setItem(key,JSON.stringify({schema:'attention-lab/store-v1',profiles:{},runs:[{id:'legacy-check',participant:'QA01',experiment:'search',mode:'formal',protocol:'attention-v2.2-short-20261101',status:'complete',created_at:'2026-11-01T00:00:00Z',completed_at:'2026-11-01T00:01:00Z',trials:[]}],imports:[],settings:{project:'XYVTBN',autoUpload:true}}));
   },{key});
-  await page.goto(base);assert.equal(await page.evaluate(()=>LabCore.VERSION),'2.1.1');await login(page);
+  await page.goto(base);assert.equal(await page.evaluate(()=>LabCore.VERSION),'2.1.2');await login(page);
   assert.match(await page.locator('.total-progress').innerText(),/0 \/ 2/);assert.equal(await page.locator('.card-body>p,.page-heading p').count(),0);
   await page.screenshot({path:path.join(artifacts,'首页.png'),fullPage:true});
   await page.clock.install();
