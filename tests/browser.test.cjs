@@ -1,5 +1,6 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {pathToFileURL}=require('node:url');
+require('../dist/js/core.js');
 let playwright;try{playwright=require('playwright');}catch{playwright=require(path.join(process.env.LAB_TEST_NODE_MODULES||'C:/Users/Lenovo/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules','playwright'));}
 const root=path.resolve(__dirname,'..'),artifacts=path.resolve(root,'../_验证临时');fs.mkdirSync(artifacts,{recursive:true});
 const key='attention-lab:study-v2',base=process.env.LAB_TEST_URL||'http://127.0.0.1:53146/';
@@ -62,7 +63,7 @@ async function researcher(page){await page.locator('[data-action=menu]').click()
   await page.addInitScript(({key})=>{
    if(!localStorage.getItem(key))localStorage.setItem(key,JSON.stringify({schema:'attention-lab/store-v1',profiles:{},runs:[{id:'legacy-check',participant:'QA01',experiment:'search',mode:'formal',protocol:'attention-v2.2-short-20261101',status:'complete',created_at:'2026-11-01T00:00:00Z',completed_at:'2026-11-01T00:01:00Z',trials:[]}],imports:[],settings:{project:'XYVTBN',autoUpload:true}}));
   },{key});
-  await page.goto(base);assert.equal(await page.evaluate(()=>LabCore.VERSION),'2.1.0');await login(page);
+  await page.goto(base);assert.equal(await page.evaluate(()=>LabCore.VERSION),'2.1.1');await login(page);
   assert.match(await page.locator('.total-progress').innerText(),/0 \/ 2/);assert.equal(await page.locator('.card-body>p,.page-heading p').count(),0);
   await page.screenshot({path:path.join(artifacts,'首页.png'),fullPage:true});
   await page.clock.install();
@@ -108,7 +109,19 @@ async function researcher(page){await page.locator('[data-action=menu]').click()
   await rp.reload();await rp.locator('.cards').waitFor();await rp.locator('[data-action=choose][data-experiment=search]').click();await drive(rp,'search',{pause:false});
   let final;for(let i=0;i<25;i++){final=await rp.evaluate(({key,id})=>JSON.parse(localStorage.getItem(key)).runs.find(r=>r.id===id),{key,id:beforeReload});if(final.upload.status==='uncertain')break;await tick(rp,100);}
   assert.equal(final.status,'complete');assert.ok(final.trials.some(t=>t.excluded_reason==='restarted_block'));assert.equal(final.trials.filter(t=>t.phase==='formal'&&!t.excluded_reason&&!t.technical_invalid).length,40);assert.equal(final.upload.status,'uncertain');assert.match(await rp.locator('#finish-save-label').innerText(),/已保存/);await recovery.close();
-  assert.deepEqual(errors,[]);console.log('PASS: Edge complete tasks, geometry-based scoring, pause, legacy preservation, CSV/JSON/platform import, intercepted upload, offline HTML, mobile dashboard, reload and failed-upload recovery; real course POST=0');
+  const regression=await context(browser),gp=await regression.newPage(),C=globalThis.LabCore,existing=C.makeRun('search','P01');existing.version='2.1.0';
+  for(const [bi,b] of existing.blocks.entries())for(const [ti,t] of b.trials.entries()){
+   const wrong=t.target_present&&t.case_index<(t.condition==='baseline'?13:11);
+   existing.trials.push(C.normalizeTrial({...t,trial_id:`${existing.id}:${bi}:${ti}`,attempt_id:C.uid(),phase:'formal',block_index:bi,trial_index:ti,timeout:false,technical_invalid:false,rt_ms:t.condition==='baseline'?1000:700,response:wrong?'j':t.target_present?'f':'j'},existing));
+  }
+  existing.status='complete';existing.completed_at=new Date().toISOString();existing.upload={status:'confirmed'};
+  const untouched=JSON.stringify({schema:'attention-lab/store-v1',profiles:{P01:{id:'P01',consent_version:'20261107-v4',consent_at:existing.created_at}},runs:[existing],imports:[],settings:{project:'XYVTBN',autoUpload:true}});
+  await gp.addInitScript(({key,raw})=>{if(!localStorage.getItem(key))localStorage.setItem(key,raw);sessionStorage.setItem(key+':login','P01');},{key,raw:untouched});
+  await gp.goto(base);await gp.locator('.cards').waitFor();await researcher(gp);await gp.getByText('作答汇总',{exact:true}).click();
+  assert.equal(await gp.locator('.result-card').first().locator('.result-plot rect').count(),2);assert.match(await gp.locator('.results-page').innerText(),/17 \/ 19/);assert.match(await gp.locator('.results-page').innerText(),/已计算/);assert.equal(await gp.locator('text=核对有效数').count(),0);
+  await gp.screenshot({path:path.join(artifacts,'低有效数对比.png'),fullPage:true});
+  assert.equal(await gp.evaluate(key=>localStorage.getItem(key),key),untouched);await gp.reload();await gp.locator('.cards').waitFor();await researcher(gp);assert.equal(await gp.evaluate(key=>localStorage.getItem(key),key),untouched);assert.equal(await gp.locator('.result-card').first().locator('.result-plot rect').count(),2);await regression.close();
+  assert.deepEqual(errors,[]);console.log('PASS: Edge tasks, imports, offline HTML, recovery, 17/19 comparison charts and byte-identical existing storage after analysis/reload; real course POST=0');
   await c.close();
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

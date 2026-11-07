@@ -4,7 +4,7 @@ const path=require('node:path');
 const root=__dirname,dist=path.join(root,'dist');
 let html=fs.readFileSync(path.join(dist,'index.html'),'utf8');
 const css=fs.readFileSync(path.join(dist,'css/style.css'),'utf8');
-html=html.replace('  <link rel="stylesheet" href="css/style.css?v=2.1.0">','  <style>\n'+css+'\n  </style>');
+html=html.replace('  <link rel="stylesheet" href="css/style.css?v=2.1.1">','  <style>\n'+css+'\n  </style>');
 html=html.replace(/^\s*<script defer src="[^"]+"><\/script>\s*$/gm,'');
 const scripts=['collection-config.js','build-info.js','core.js','results-data.js','app.js'].map(file=>{
   const content=fs.readFileSync(path.join(dist,'js',file),'utf8').replace(/<\/script/gi,'<\\/script');

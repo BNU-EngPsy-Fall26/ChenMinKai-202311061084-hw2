@@ -1,7 +1,7 @@
 /* 确定性刺激、记录校验与被试内分析。 */
 (function (root) {
   'use strict';
-  const VERSION='2.1.0', PROTOCOL='attention-v4-two-condition-20261107';
+  const VERSION='2.1.1', PROTOCOL='attention-v4-two-condition-20261107', ANALYSIS_POLICY='all-available-v1';
   const EXPERIMENT_IDS={search:'visual_search_ratio_v4',ratio:'graphical_ratio_spacing_v4'};
   const CONDITIONS={search:['baseline','improved'],ratio:['adjacent','separated']};
   const CONDITION_NAMES={baseline:'等量干扰',improved:'偏置比例',adjacent:'相邻',separated:'间隔一段'};
@@ -158,16 +158,16 @@
   }
   function paired(values){
     const a=values.filter(Number.isFinite),n=a.length,estimate=mean(a);if(!n)return{n:0,mean:null,median:null,ci:null,p:null,values:[]};let p=null;
-    if(n>=5){const observed=Math.abs(estimate)-1e-10,total=n<=16?2**n:20000,rng=random('sign:'+a.join(','));let extreme=0;for(let i=0;i<total;i++){let sum=0;for(let j=0;j<n;j++)sum+=a[j]*(n<=16?(i&(1<<j)?1:-1):(rng()<.5?1:-1));if(Math.abs(sum/n)>=observed)extreme++;}p=n<=16?extreme/total:(extreme+1)/(total+1);}
+    {const observed=Math.abs(estimate)-1e-10,total=n<=16?2**n:20000,rng=random('sign:'+a.join(','));let extreme=0;for(let i=0;i<total;i++){let sum=0;for(let j=0;j<n;j++)sum+=a[j]*(n<=16?(i&(1<<j)?1:-1):(rng()<.5?1:-1));if(Math.abs(sum/n)>=observed)extreme++;}p=n<=16?extreme/total:(extreme+1)/(total+1);}
     return{n,mean:estimate,median:median(a),ci:null,p,values:a};
   }
   function subjectSummary(run){
     const rows=analysisRows(run),isSearch=run.experiment==='search',cells={},effects={};
-    const valid=rows.filter(t=>!t.timeout&&Number.isFinite(t.rt_ms)&&t.rt_ms>=(isSearch?200:500)&&t.rt_ms<=(isSearch?5000:30000)&&(isSearch?t.correct:Number.isFinite(t.estimate)&&t.estimate>=0&&t.estimate<=100));
+    const valid=rows.filter(t=>!t.timeout&&Number.isFinite(t.rt_ms)&&(isSearch?t.correct:Number.isFinite(t.estimate)));
     for(const condition of CONDITIONS[run.experiment]){
       const raw=rows.filter(t=>t.condition===condition),v=valid.filter(t=>t.condition===condition),correct=v.filter(t=>t.correct);
       const cell={key:run.experiment+':'+condition,total:raw.length,valid:v.length,rt:mean(v.map(t=>t.rt_ms)),median:median(v.map(t=>t.rt_ms)),ae:mean(v.map(t=>t.absolute_error).filter(Number.isFinite)),bias:mean(v.map(t=>t.signed_error).filter(Number.isFinite)),lae:mean(v.map(t=>t.log_absolute_error).filter(Number.isFinite)),error:mean(raw.map(t=>t.correct?0:1)),timeout:mean(raw.map(t=>t.timeout?1:0)),eligible:false};
-      if(isSearch){cell.present=median(v.filter(t=>t.target_present).map(t=>t.rt_ms));cell.absent=median(v.filter(t=>!t.target_present).map(t=>t.rt_ms));cell.present_valid=v.filter(t=>t.target_present).length;cell.absent_valid=v.filter(t=>!t.target_present).length;cell.rt=cell.present!=null&&cell.absent!=null?(cell.present+cell.absent)/2:null;cell.eligible=cell.present_valid>=8&&cell.absent_valid>=8;cell.miss=mean(raw.filter(t=>t.target_present).map(t=>t.correct?0:1));cell.false_alarm=mean(raw.filter(t=>!t.target_present).map(t=>t.correct?0:1));}
+      if(isSearch){cell.present=median(v.filter(t=>t.target_present).map(t=>t.rt_ms));cell.absent=median(v.filter(t=>!t.target_present).map(t=>t.rt_ms));cell.present_valid=v.filter(t=>t.target_present).length;cell.absent_valid=v.filter(t=>!t.target_present).length;cell.rt=mean([cell.present,cell.absent].filter(Number.isFinite));cell.eligible=cell.rt!=null;cell.miss=mean(raw.filter(t=>t.target_present).map(t=>t.correct?0:1));cell.false_alarm=mean(raw.filter(t=>!t.target_present).map(t=>t.correct?0:1));}
       else{cell.eligible=v.length>0;cell.correct_only_valid=correct.length;cell.correct_only_ae=mean(correct.map(t=>t.absolute_error));}
       cells[cell.key]=cell;
     }
@@ -188,13 +188,13 @@
     const groups={};
     for(const experiment of ['search','ratio']){
       const ss=subjects.filter(s=>s.experiment===experiment),cells={};
-      for(const condition of CONDITIONS[experiment]){const key=experiment+':'+condition,cs=ss.map(s=>s.cells[key]).filter(c=>c?.eligible);cells[key]={key,n:cs.length};for(const field of ['rt','ae','error','lae','timeout','bias','correct_only_ae'])cells[key][field]=mean(cs.map(c=>c[field]).filter(Number.isFinite));}
+      for(const condition of CONDITIONS[experiment]){const key=experiment+':'+condition,cs=ss.map(s=>s.cells[key]);cells[key]={key,n:cs.length,valid:cs.reduce((n,c)=>n+c.valid,0),present_valid:experiment==='search'?cs.reduce((n,c)=>n+c.present_valid,0):null,absent_valid:experiment==='search'?cs.reduce((n,c)=>n+c.absent_valid,0):null};for(const field of ['rt','ae','error','lae','timeout','bias','correct_only_ae'])cells[key][field]=mean(cs.map(c=>c[field]).filter(Number.isFinite));}
       const effects={};for(const key of ['primary','error_difference',...(experiment==='ratio'?['time_cost','bias_change','correct_only_primary']:[])])effects[key]=paired(ss.map(s=>s.effects[key]));
       groups[experiment]={n:ss.length,analyzable_n:effects.primary.n,subjects:ss,cells,effects};
     }
     const tests=['search','ratio'].map(experiment=>({experiment,p:groups[experiment].effects.primary.p})).filter(t=>Number.isFinite(t.p)).sort((a,b)=>a.p-b.p);
     if(tests.length===2){let previous=0;tests.forEach((t,i)=>{previous=Math.max(previous,Math.min(1,t.p*(2-i)));groups[t.experiment].effects.primary.p_holm=previous;});}
-    return{protocol:PROTOCOL,created_at:new Date().toISOString(),participants:new Set(subjects.map(s=>s.participant)).size,completed_runs:subjects.length,diagnostics,groups};
+    return{protocol:PROTOCOL,analysis_policy:ANALYSIS_POLICY,created_at:new Date().toISOString(),participants:new Set(subjects.map(s=>s.participant)).size,completed_runs:subjects.length,diagnostics,groups};
   }
   function payload(run,project){
     const check=inspectRun(run);if(!check.ok||run.status!=='complete'||run.withdrawn||run.mode!=='formal')throw Error(check.message||'请选择完整正式记录');
@@ -203,5 +203,5 @@
       if(t.labels)row.labels=t.labels.join(',');return row;
     }),meta:{version:VERSION,protocol:PROTOCOL,run_id:run.id,consent_version:run.consent_version||'',consent_at:run.consent_at||'',prereg_commit:run.preregistration?.preregistration_commit||'',predictions_sha256_lf:run.preregistration?.predictions_sha256_lf||'',key_mapping:JSON.stringify(run.mapping),experiment_order:run.experiment_order||'',width:run.environment?.width||0,height:run.environment?.height||0,ua:run.environment?.ua||''}};
   }
-  root.LabCore={VERSION,PROTOCOL,EXPERIMENT_IDS,CONDITIONS,CONDITION_NAMES,COLOR,RATIOS,hash,random,shuffle,assignment,uid,esc,makeRun,practiceTrials,replacementTrial,normalizeTrial,analysisRows,inspectRun,searchItems,letter,searchSVG,chartSVG,mean,median,round,paired,formalRows,subjectSummary,analyze,payload};
+  root.LabCore={VERSION,PROTOCOL,ANALYSIS_POLICY,EXPERIMENT_IDS,CONDITIONS,CONDITION_NAMES,COLOR,RATIOS,hash,random,shuffle,assignment,uid,esc,makeRun,practiceTrials,replacementTrial,normalizeTrial,analysisRows,inspectRun,searchItems,letter,searchSVG,chartSVG,mean,median,round,paired,formalRows,subjectSummary,analyze,payload};
 })(typeof window!=='undefined'?window:globalThis);
