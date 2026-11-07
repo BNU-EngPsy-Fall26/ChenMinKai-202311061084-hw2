@@ -1,8 +1,8 @@
 /* 确定性刺激、记录校验与被试内分析。 */
 (function (root) {
   'use strict';
-  const VERSION='2.0.0', PROTOCOL='attention-v3-two-condition-20261107';
-  const EXPERIMENT_IDS={search:'visual_search_ratio_v3',ratio:'graphical_ratio_spacing_v3'};
+  const VERSION='2.1.0', PROTOCOL='attention-v4-two-condition-20261107';
+  const EXPERIMENT_IDS={search:'visual_search_ratio_v4',ratio:'graphical_ratio_spacing_v4'};
   const CONDITIONS={search:['baseline','improved'],ratio:['adjacent','separated']};
   const CONDITION_NAMES={baseline:'等量干扰',improved:'偏置比例',adjacent:'相邻',separated:'间隔一段'};
   const COLOR={green:'#28734d',brown:'#8b5837',orange:'#cc6b32',blue:'#28649f',ink:'#193347',muted:'#c9d0d5'};
@@ -29,23 +29,37 @@
     return trials;
   }
   function ratioSpec(condition,true_ratio,reference_height,shorter_position,seed,case_index,phase='formal'){
-    const rng=random(seed),short=reference_height*true_ratio/100,long=reference_height;
-    const context=[0,1,2].map(()=>18+rng()*12),upper=shorter_position==='upper'?short:long,lower=shorter_position==='upper'?long:short;
-    const values=condition==='adjacent'?[...context,lower,upper]:[context[0],context[1],lower,context[2],upper];
-    const lowIndex=condition==='adjacent'?3:2;
-    const labels=values.map((v,i)=>i===4?(shorter_position==='upper'?'A':'B'):i===lowIndex?(shorter_position==='upper'?'B':'A'):null);
+    const axis_max=600,short=reference_height*true_ratio/100,long=reference_height;
+    const contextRng=random(hash(`${seed}:context`)),backgroundRng=random(hash(`${seed}:background`));
+    const contextTotal=24+contextRng()*(axis_max-short-long-24),first=12+contextRng()*(contextTotal-24),context=[first,contextTotal-first];
+    const upper=shorter_position==='upper'?short:long,lower=shorter_position==='upper'?long:short;
+    const values=condition==='adjacent'?[...context,lower,upper]:[context[0],lower,context[1],upper];
+    const lowIndex=condition==='adjacent'?2:1;
+    const labels=values.map((v,i)=>i===3?(shorter_position==='upper'?'A':'B'):i===lowIndex?(shorter_position==='upper'?'B':'A'):null);
     let letter=67;for(let i=0;i<labels.length;i++)if(labels[i]==null)labels[i]=String.fromCharCode(letter++);
-    const total=values.reduce((a,b)=>a+b,0),weights=Array.from({length:5},()=>.5+rng());
-    const background_values=weights.map(w=>w/weights.reduce((a,b)=>a+b,0)*(total*(.78+rng()*.16)));
+    const backgroundTotal=axis_max*(.35+.6*backgroundRng()),weights=Array.from({length:4},()=>.2+backgroundRng()),weightSum=weights.reduce((a,b)=>a+b,0);
+    const background_values=weights.map(w=>12+(backgroundTotal-48)*w/weightSum);
     return{phase,section:'ratio',condition,chart_type:'divided_bar',separation:condition==='adjacent'?0:1,
-      true_ratio,reference_height,shorter_position,case_index,values,labels,background_values,seed};
+      true_ratio,reference_height,shorter_position,case_index,axis_max,values,labels,background_values,seed};
   }
-  function ratioTrials(seed,practice=false){
-    const source=practice?[32,68]:RATIOS,out=[];
-    source.forEach((ratio,i)=>{const stimulusSeed=hash(`${seed}:case:${i}`);for(const condition of CONDITIONS.ratio)out.push(ratioSpec(condition,ratio,i%2?250:125,i%2?'upper':'lower',stimulusSeed,i,practice?'practice':'formal'));});
-    const rng=random(seed+39);let trials;
-    for(let n=0;n<1000;n++){trials=shuffle(out,rng);if(trials.every((t,i)=>i===0||t.true_ratio!==trials[i-1].true_ratio)&&trials.every((t,i)=>i<3||![1,2,3].every(j=>trials[i-j].condition===t.condition)))return trials;}
-    return trials;
+  function ratioTrials(seed,practice=false,index=0){
+    const source=practice?[32,68]:RATIOS,rng=random(hash(`${seed}:schedule`)),half=source.length/2;
+    const heights=shuffle([...Array(half).fill(125),...Array(half).fill(250)],random(hash(`${seed}:heights`)));
+    let positions;
+    for(let n=0;n<1000;n++){
+      positions=shuffle([...Array(half).fill('upper'),...Array(half).fill('lower')],rng);
+      if(practice||[125,250].every(h=>['upper','lower'].every(p=>heights.filter((v,i)=>v===h&&positions[i]===p).length>=2)))break;
+    }
+    const cases=source.map((ratio,i)=>({i,first:(i+index)%2===0?'adjacent':'separated',trials:Object.fromEntries(CONDITIONS.ratio.map(c=>[c,ratioSpec(c,ratio,heights[i],positions[i],hash(`${seed}:case:${i}`),i,practice?'practice':'formal')]))}));
+    for(let n=0;n<2000;n++){
+      const out=[];
+      for(const second of [false,true]){
+        const a=shuffle(cases.filter(c=>c.first==='adjacent'),rng),b=shuffle(cases.filter(c=>c.first==='separated'),rng);
+        for(let i=0;i<half;i++)out.push(...shuffle([a[i].trials[second?'separated':'adjacent'],b[i].trials[second?'adjacent':'separated']],rng));
+      }
+      if(out.every((t,i)=>i===0||t.true_ratio!==out[i-1].true_ratio))return out;
+    }
+    throw Error('材料顺序生成待核对');
   }
   function makeRun(experiment,participant,mode='formal'){
     if(!CONDITIONS[experiment])throw Error('请选择实验');
@@ -55,7 +69,7 @@
       blocks=order.map((condition,i)=>({id:'search-'+condition,section:'search',condition,title:'搜索',trials:searchTrials(condition,seed+i*101,index,false,seed)}));
       if(mode!=='formal')blocks.forEach(b=>b.trials=[b.trials.find(t=>t.target_present),b.trials.find(t=>!t.target_present)]);
     }else{
-      let trials=ratioTrials(seed);if(mode!=='formal')trials=ratioTrials(seed,true);
+      let trials=ratioTrials(seed,false,index);if(mode!=='formal')trials=ratioTrials(seed,true,index);
       blocks=[{id:'ratio-mixed',section:'ratio',title:'比例判断',trials}];
     }
     return{schema:'attention-lab/run-v2',id,version:VERSION,protocol:PROTOCOL,preregistration:root.LAB_BUILD?{...root.LAB_BUILD}:null,
@@ -64,7 +78,7 @@
   }
   function practiceTrials(run,section){
     const seed=run.seed+500+(run.practice_rounds[section]||0)*47;
-    if(run.experiment==='ratio')return ratioTrials(seed,true);
+    if(run.experiment==='ratio')return ratioTrials(seed,true,run.assignment);
     return shuffle(CONDITIONS.search.flatMap((c,i)=>searchTrials(c,seed+i,run.assignment,true)),random(seed+29));
   }
   function replacementTrial(t,attempt){
@@ -85,7 +99,7 @@
   function searchSVG(t,attempt=0){return `<svg class="search-array" viewBox="0 0 980 510" role="img" aria-label="搜索绿色T">${searchItems(t,attempt).map(d=>letter(d.x,d.y,d.shape,d.color)).join('')}</svg>`;}
   function chartSVG(t){
     const height=580,scale=.8,base=520,width=80;
-    let content=`<path d="M120 32V${base}H520" fill="none" stroke="#adb5bc" stroke-width="1.2"/>`;
+    let content=`<path d="M120 40V${base}H520" fill="none" stroke="#adb5bc" stroke-width="1.2"/><g fill="#52636e" font-family="Arial,sans-serif" font-size="17"><text x="109" y="${base+6}" text-anchor="end">0</text><text x="109" y="46" text-anchor="end">100</text><text x="260" y="552" text-anchor="middle">A</text><text x="440" y="552" text-anchor="middle">B</text></g>`;
     [[t.values,220,true],[t.background_values,400,false]].forEach(([values,x,mark])=>{let y=base;values.forEach((v,i)=>{const h=v*scale;y-=h;content+=`<rect x="${x}" y="${y}" width="${width}" height="${h}" fill="white" stroke="#344653" stroke-width="1.8"/>`;if(mark&&['A','B'].includes(t.labels[i]))content+=`<circle cx="${x+width/2}" cy="${y+h/2}" r="3.3" fill="#243846"/>`;});});
     return `<svg class="divided-chart" viewBox="0 0 640 ${height}" role="img" aria-label="比较同柱中两个圆点标记的分段">${content}</svg>`;
   }
@@ -99,10 +113,10 @@
       row.correct=!t.timeout&&(run.mapping[String(t.response).toLowerCase()]===(t.target_present?'present':'absent'));
     }else if(t.section==='ratio'){
       if(!CONDITIONS.ratio.includes(t.condition)||t.chart_type!=='divided_bar'||t.separation!==(t.condition==='adjacent'?0:1))throw Error('比例布局待核对');
-      if(!Array.isArray(t.values)||t.values.length!==5||!t.values.every(v=>Number.isFinite(v)&&v>0)||!Array.isArray(t.labels)||t.labels.length!==5||new Set(t.labels).size!==5||!['A','B','C','D','E'].every(v=>t.labels.includes(v))||!Array.isArray(t.background_values)||t.background_values.length!==5||!t.background_values.every(v=>Number.isFinite(v)&&v>0))throw Error('分段数值待核对');
+      if(!Array.isArray(t.values)||t.values.length!==4||!t.values.every(v=>Number.isFinite(v)&&v>0)||!Array.isArray(t.labels)||t.labels.length!==4||new Set(t.labels).size!==4||!['A','B','C','D'].every(v=>t.labels.includes(v))||!Array.isArray(t.background_values)||t.background_values.length!==4||!t.background_values.every(v=>Number.isFinite(v)&&v>0))throw Error('分段数值待核对');
       const a=t.labels.indexOf('A'),b=t.labels.indexOf('B'),ratio=t.values[a]/t.values[b]*100;
-      const indices=[a,b].sort((x,y)=>x-y),expected=t.condition==='adjacent'?[3,4]:[2,4];
-      if(!indices.every((v,i)=>v===expected[i])||!(ratio>0&&ratio<100)||Math.abs(ratio-t.true_ratio)>1e-7||![125,250].includes(t.reference_height)||Math.abs(t.values[b]-t.reference_height)>1e-7||t.shorter_position!==(a>b?'upper':'lower')||!Number.isInteger(t.case_index))throw Error('真实比例或标记位置待核对');
+      const indices=[a,b].sort((x,y)=>x-y),expected=t.condition==='adjacent'?[2,3]:[1,3];
+      if(t.axis_max!==600||t.values.reduce((a,b)=>a+b,0)>600||t.background_values.reduce((a,b)=>a+b,0)>600||!indices.every((v,i)=>v===expected[i])||!(ratio>0&&ratio<100)||Math.abs(ratio-t.true_ratio)>1e-7||![125,250].includes(t.reference_height)||Math.abs(t.values[b]-t.reference_height)>1e-7||t.shorter_position!==(a>b?'upper':'lower')||!Number.isInteger(t.case_index))throw Error('真实比例或标记位置待核对');
       row.true_ratio=ratio;
       if(!t.timeout){
         if(!Number.isFinite(t.estimate)||t.estimate<0||t.estimate>100||!['upper','lower'].includes(t.shorter_response))throw Error('比例作答待核对');
@@ -149,18 +163,18 @@
   }
   function subjectSummary(run){
     const rows=analysisRows(run),isSearch=run.experiment==='search',cells={},effects={};
-    const valid=rows.filter(t=>!t.timeout&&t.correct&&Number.isFinite(t.rt_ms)&&t.rt_ms>=(isSearch?200:500)&&t.rt_ms<=(isSearch?5000:30000));
+    const valid=rows.filter(t=>!t.timeout&&Number.isFinite(t.rt_ms)&&t.rt_ms>=(isSearch?200:500)&&t.rt_ms<=(isSearch?5000:30000)&&(isSearch?t.correct:Number.isFinite(t.estimate)&&t.estimate>=0&&t.estimate<=100));
     for(const condition of CONDITIONS[run.experiment]){
-      const raw=rows.filter(t=>t.condition===condition),v=valid.filter(t=>t.condition===condition);
+      const raw=rows.filter(t=>t.condition===condition),v=valid.filter(t=>t.condition===condition),correct=v.filter(t=>t.correct);
       const cell={key:run.experiment+':'+condition,total:raw.length,valid:v.length,rt:mean(v.map(t=>t.rt_ms)),median:median(v.map(t=>t.rt_ms)),ae:mean(v.map(t=>t.absolute_error).filter(Number.isFinite)),bias:mean(v.map(t=>t.signed_error).filter(Number.isFinite)),lae:mean(v.map(t=>t.log_absolute_error).filter(Number.isFinite)),error:mean(raw.map(t=>t.correct?0:1)),timeout:mean(raw.map(t=>t.timeout?1:0)),eligible:false};
       if(isSearch){cell.present=median(v.filter(t=>t.target_present).map(t=>t.rt_ms));cell.absent=median(v.filter(t=>!t.target_present).map(t=>t.rt_ms));cell.present_valid=v.filter(t=>t.target_present).length;cell.absent_valid=v.filter(t=>!t.target_present).length;cell.rt=cell.present!=null&&cell.absent!=null?(cell.present+cell.absent)/2:null;cell.eligible=cell.present_valid>=8&&cell.absent_valid>=8;cell.miss=mean(raw.filter(t=>t.target_present).map(t=>t.correct?0:1));cell.false_alarm=mean(raw.filter(t=>!t.target_present).map(t=>t.correct?0:1));}
-      else cell.eligible=v.length>=8;
+      else{cell.eligible=v.length>0;cell.correct_only_valid=correct.length;cell.correct_only_ae=mean(correct.map(t=>t.absolute_error));}
       cells[cell.key]=cell;
     }
     const[a,b]=CONDITIONS[run.experiment].map(c=>cells[run.experiment+':'+c]);
     effects.primary=a.eligible&&b.eligible?(isSearch?a.rt-b.rt:a.ae-b.ae):null;
     effects.error_difference=a.error!=null&&b.error!=null?a.error-b.error:null;
-    if(!isSearch){effects.time_cost=a.eligible&&b.eligible?b.rt-a.rt:null;effects.bias_change=a.eligible&&b.eligible?b.bias-a.bias:null;}
+    if(!isSearch){effects.time_cost=a.eligible&&b.eligible?b.rt-a.rt:null;effects.bias_change=a.eligible&&b.eligible?b.bias-a.bias:null;effects.correct_only_primary=a.correct_only_ae!=null&&b.correct_only_ae!=null?a.correct_only_ae-b.correct_only_ae:null;}
     return{participant:run.participant,run_id:run.id,experiment:run.experiment,quality:effects.primary!=null,accuracy:mean(rows.map(t=>t.correct?1:0)),raw_count:rows.length,valid_count:valid.length,cells,effects,completed_at:run.completed_at,experiment_order:run.experiment_order};
   }
   function analyze(runs){
@@ -174,8 +188,8 @@
     const groups={};
     for(const experiment of ['search','ratio']){
       const ss=subjects.filter(s=>s.experiment===experiment),cells={};
-      for(const condition of CONDITIONS[experiment]){const key=experiment+':'+condition,cs=ss.map(s=>s.cells[key]).filter(c=>c?.eligible);cells[key]={key,n:cs.length};for(const field of ['rt','ae','error','lae','timeout','bias'])cells[key][field]=mean(cs.map(c=>c[field]).filter(Number.isFinite));}
-      const effects={};for(const key of ['primary','error_difference',...(experiment==='ratio'?['time_cost','bias_change']:[])])effects[key]=paired(ss.map(s=>s.effects[key]));
+      for(const condition of CONDITIONS[experiment]){const key=experiment+':'+condition,cs=ss.map(s=>s.cells[key]).filter(c=>c?.eligible);cells[key]={key,n:cs.length};for(const field of ['rt','ae','error','lae','timeout','bias','correct_only_ae'])cells[key][field]=mean(cs.map(c=>c[field]).filter(Number.isFinite));}
+      const effects={};for(const key of ['primary','error_difference',...(experiment==='ratio'?['time_cost','bias_change','correct_only_primary']:[])])effects[key]=paired(ss.map(s=>s.effects[key]));
       groups[experiment]={n:ss.length,analyzable_n:effects.primary.n,subjects:ss,cells,effects};
     }
     const tests=['search','ratio'].map(experiment=>({experiment,p:groups[experiment].effects.primary.p})).filter(t=>Number.isFinite(t.p)).sort((a,b)=>a.p-b.p);

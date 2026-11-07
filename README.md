@@ -1,6 +1,6 @@
 # 注意实验室
 
-项目码：**XYVTBN**。软件2.0.0，协议`attention-v3-two-condition-20261107`。
+项目码：**XYVTBN**。软件2.1.0，协议`attention-v4-two-condition-20261107`。
 
 ## 运行
 
@@ -15,13 +15,13 @@
 
 ## 设计与预测
 
-固定5名他人，全部完成两个任务的所有条件。每项仅一个主要配对比较。搜索保留Treisman与Gelade（1980）实验I的T/X、棕/绿、白底、同时呈现和存在/缺席判断；迁移Shen等（2000）的干扰项比例操纵，不换成该文自己的X/O材料。比例任务保留Cleveland与McGill（1984）Type5分段柱结构，按Talbot等（2014）实验3采用相邻与间隔一段。
+固定5名他人，全部完成两个任务的所有条件。每项仅一个主要配对比较。搜索采用绿色T、棕色T与绿色X的结合特征搜索，比较等量与偏置干扰项比例（Treisman与Gelade，1980；Shen等，2000）。比例任务采用两根四段柱、同柱两个圆点标记，比较标记段相邻与间隔一段的布局（Cleveland与McGill，1984；Talbot等，2014）。
 
-收数前预测：[本版设计与预测](docs/研究设计与预测_20261107.txt)。旧版[冻结预测](docs/研究设计与预测.md)属于历史协议。本版预测的本地Git提交及UTF-8/LF SHA-256写入build-info.js和会话元数据。
+收数前预测：[本版设计与预测](docs/研究设计与预测_20261107_v4.txt)。本版预测的本地Git提交及UTF-8/LF SHA-256写入build-info.js和会话元数据。
 
 预测：搜索偏置比例的正确反应时较短；比例间隔一段的AE较小。两项效应均以“基线−改进”计算。错误、超时和比例作答时间同时报告。5人用于课程小样本复现，不保证显著；精确双侧符号翻转检验最小p为0.0625。
 
-搜索固定30项，不估计搜索斜率。比例只测两种排列，不估计最优间隔。SVG自适应缩放并记录实际显示尺寸，与原文纸卡、油墨、视角存在差异。解释范围与计分门槛见设计文件。
+搜索固定30项，不估计搜索斜率。比例只测两种排列，不估计最优间隔。比例材料的参考长度和较短段上下位置分别平衡；每两个试次含两条件各一次。SVG自适应缩放并记录实际显示尺寸。比例主AE纳入全部有效数值回答，选段正确率、超时、作答时间及仅选段正确时的AE另行报告；每条件的实际有效数公开呈现。解释范围与计分规则见设计文件。
 
 ## 保存与恢复
 
@@ -35,8 +35,8 @@ JSON保留全部尝试、练习、技术无效和撤回状态；CSV提供逐行�
 
 项目XYVTBN已配置自动上传。每完成一项正式任务，程序向`https://attention-lab-production.up.railway.app/api/hw2/submit`发送一次请求：
 
-- `visual_search_ratio_v3`：40个正式试次，condition逐行标记baseline/improved。
-- `graphical_ratio_spacing_v3`：20个正式试次，condition逐行标记adjacent/separated。
+- `visual_search_ratio_v4`：40个正式试次，condition逐行标记baseline/improved。
+- `graphical_ratio_spacing_v4`：20个正式试次，condition逐行标记adjacent/separated。
 
 平台顶层condition留空，逐试次cond记录被试内条件。练习、体验、技术无效记录和历史协议不上传。项目码为公开配置，下载密钥由创建者保存在[课程收数站](https://attention-lab-production.up.railway.app/hw2)。本地HTML上传需要联网。
 

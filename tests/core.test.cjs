@@ -23,11 +23,14 @@ for(let n=0;n<100;n++){
  for(const t of search.blocks[0].trials){const matched=search.blocks[1].trials.find(x=>x.case_index===t.case_index);const a=C.searchItems(t),b=C.searchItems(matched);assert.deepEqual(a.map(x=>[x.x,x.y]),b.map(x=>[x.x,x.y]));assert.deepEqual(a.filter(x=>x.target).map(x=>[x.x,x.y]),b.filter(x=>x.target).map(x=>[x.x,x.y]));}
  const ratio=C.makeRun('ratio','T'+String(n+1).padStart(2,'0')),trials=ratio.blocks.flatMap(b=>b.trials);
  assert.equal(trials.length,20);assert.equal(C.practiceTrials(ratio,'ratio').length,4);
- for(const c of C.CONDITIONS.ratio){const rows=trials.filter(t=>t.condition===c);assert.equal(rows.length,10);assert.equal(rows.filter(t=>t.shorter_position==='upper').length,5);assert.equal(rows.filter(t=>t.reference_height===125).length,5);assert.deepEqual(rows.map(t=>t.true_ratio).sort((a,b)=>a-b),C.RATIOS);}
+ for(const c of C.CONDITIONS.ratio){const rows=trials.filter(t=>t.condition===c);assert.equal(rows.length,10);assert.equal(rows.filter(t=>t.shorter_position==='upper').length,5);assert.equal(rows.filter(t=>t.reference_height===125).length,5);assert.deepEqual(rows.map(t=>t.true_ratio).sort((a,b)=>a-b),C.RATIOS);for(const h of [125,250])for(const p of ['upper','lower'])assert.ok([2,3].includes(rows.filter(t=>t.reference_height===h&&t.shorter_position===p).length));}
+ for(let i=0;i<20;i+=2){assert.equal(new Set(trials.slice(i,i+2).map(t=>t.condition)).size,2);assert.notEqual(trials[i].case_index,trials[i+1].case_index);}
+ for(const c of C.CONDITIONS.ratio)assert.equal(trials.slice(0,10).filter(t=>t.condition===c).length,5);
+ assert.equal(new Set(trials.slice(0,10).map(t=>t.case_index)).size,10);assert.equal(new Set(trials.slice(10).map(t=>t.case_index)).size,10);
  assert.ok(trials.every((t,i)=>i===0||t.true_ratio!==trials[i-1].true_ratio));
  for(let i=0;i<10;i++){
   const [a,b]=C.CONDITIONS.ratio.map(c=>trials.find(t=>t.condition===c&&t.case_index===i));
-  assert.deepEqual(a.values.slice().sort((x,y)=>x-y),b.values.slice().sort((x,y)=>x-y));assert.deepEqual(a.background_values,b.background_values);
+  assert.deepEqual(a.values.slice().sort((x,y)=>x-y),b.values.slice().sort((x,y)=>x-y));assert.deepEqual(a.background_values,b.background_values);assert.equal(a.values.length,4);assert.equal(a.background_values.length,4);assert.equal(a.axis_max,600);assert.ok(a.values.reduce((s,v)=>s+v,0)<=600);assert.ok(a.background_values.reduce((s,v)=>s+v,0)<=600);
   for(const t of [a,b,C.replacementTrial(a,1),C.replacementTrial(b,1000)]){close(t.values[t.labels.indexOf('A')]/t.values[t.labels.indexOf('B')]*100,t.true_ratio);assert.equal(t.shorter_position,t.labels.indexOf('A')>t.labels.indexOf('B')?'upper':'lower');assert.equal(Math.abs(t.labels.indexOf('A')-t.labels.indexOf('B')),t.separation+1);C.normalizeTrial({...t,timeout:true},ratio);const html=C.chartSVG(t);assert.equal((html.match(/<circle /g)||[]).length,2);for(const rect of html.matchAll(/<rect x="\d+" y="([\d.e-]+)" width="80" height="([\d.e-]+)"/g)){assert.ok(Number(rect[1])>=0);assert.ok(Number(rect[1])+Number(rect[2])<=520.00001);}}
  }
 }
@@ -42,6 +45,11 @@ for(const experiment of ['search','ratio']){
 }
 const search=complete('search');for(const t of search.trials.filter(t=>t.condition==='baseline'&&t.target_present).slice(0,3))t.rt_ms=150;assert.equal(C.subjectSummary(search).effects.primary,null);
 const badRatio=complete('ratio');badRatio.trials[0].shorter_position=badRatio.trials[0].shorter_position==='upper'?'lower':'upper';assert.equal(C.inspectRun(badRatio).ok,false);
+const wrongChoices=complete('ratio');for(const t of wrongChoices.trials)t.shorter_response=t.shorter_position==='upper'?'lower':'upper';const allNumeric=C.subjectSummary(wrongChoices);assert.ok(C.inspectRun(wrongChoices).ok);close(allNumeric.effects.primary,3);assert.equal(allNumeric.valid_count,20);assert.equal(allNumeric.accuracy,0);assert.equal(allNumeric.effects.correct_only_primary,null);
+for(const t of wrongChoices.trials.filter(t=>t.condition==='adjacent').slice(0,9)){t.timeout=true;t.estimate=null;t.response=null;t.rt_ms=null;}const partial=C.subjectSummary(wrongChoices);assert.equal(partial.cells['ratio:adjacent'].valid,1);close(partial.effects.primary,3);
+const last=wrongChoices.trials.find(t=>t.condition==='adjacent'&&!t.timeout);last.timeout=true;last.estimate=null;last.response=null;last.rt_ms=null;assert.equal(C.subjectSummary(wrongChoices).effects.primary,null);
+const firstCounts=Array(10).fill(0);for(let i=1;i<=5;i++){const t=C.makeRun('ratio','P0'+i).blocks[0].trials;for(let j=0;j<10;j++)if(t.find(x=>x.case_index===j).condition==='adjacent')firstCounts[j]++;}assert.ok(firstCounts.every(n=>n===2||n===3));
+const backgroundRelations=new Set();for(let i=0;i<50;i++)for(const t of C.makeRun('ratio','B'+i).blocks[0].trials)backgroundRelations.add(t.background_values.reduce((a,b)=>a+b,0)>t.values.reduce((a,b)=>a+b,0));assert.equal(backgroundRelations.size,2);
 close(C.paired([1,1,1,1,1]).p,.0625);assert.equal(C.paired([1,2,3,4]).p,null);
 const report=C.analyze(Array.from({length:5},(_,i)=>['search','ratio'].map(e=>complete(e,'T0'+(i+1),i))).flat());assert.equal(report.participants,5);assert.equal(report.groups.search.analyzable_n,5);assert.equal(report.groups.ratio.analyzable_n,5);close(report.groups.search.effects.primary.p_holm,.125);
 const window={};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../dist/js/build-info.js'),'utf8'),{window});
