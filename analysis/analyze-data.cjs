@@ -1,0 +1,10 @@
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+require('../dist/js/core.js');const C=globalThis.LabCore;
+const root=path.resolve(__dirname,'../..'),source=path.resolve(process.argv[2]||path.join(root,'注意实验室_全部记录_2026-11-07.json')),out=path.join(root,'04_分析与报告');
+const bytes=fs.readFileSync(source),data=JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/,'')),report=C.analyze(data.runs);
+const sd=a=>a.length>1?Math.sqrt(a.reduce((s,x)=>s+(x-C.mean(a))**2,0)/(a.length-1)):null;
+for(const e of ['search','ratio']){const g=report.groups[e];g.subjects.sort((a,b)=>a.participant.localeCompare(b.participant));g.effects.primary.sd=sd(g.effects.primary.values);g.effects.primary.dz=g.effects.primary.mean/g.effects.primary.sd;for(const c of C.CONDITIONS[e]){const cell=g.cells[e+':'+c];for(const f of ['rt','ae','lae','bias'])cell[f+'_sd']=sd(g.subjects.map(s=>s.cells[e+':'+c][f]).filter(Number.isFinite));}}
+const selected=new Set(Object.values(report.groups).flatMap(g=>g.subjects.map(s=>s.run_id))),runs=data.runs.filter(r=>selected.has(r.id));
+report.source={filename:path.basename(source),sha256:crypto.createHash('sha256').update(bytes).digest('hex'),exported_at:data.exported_at,raw_runs:data.runs.length,selected_runs:runs.length,selected_formal_trials:runs.reduce((n,r)=>n+C.formalRows(r).length,0),practice_trials:runs.reduce((n,r)=>n+r.trials.filter(t=>t.phase==='practice').length,0),confirmed_uploads:runs.filter(r=>r.upload?.status==='confirmed').length,upload_warning_sessions:runs.filter(r=>r.upload?.warning_details?.length).length};
+fs.mkdirSync(out,{recursive:true});fs.writeFileSync(path.join(out,'分析结果.json'),JSON.stringify(report,null,2)+'\n');
+console.log(JSON.stringify({source:report.source,stats:Object.fromEntries(['search','ratio'].map(e=>[e,{cells:report.groups[e].cells,effects:report.groups[e].effects,subjects:report.groups[e].subjects.map(s=>({id:s.participant,accuracy:s.accuracy,effects:s.effects,counts:Object.fromEntries(Object.entries(s.cells).map(([k,v])=>[k,v.valid]))}))}]))},null,2));
